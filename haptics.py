@@ -23,10 +23,10 @@ class TubeHaptics:
                  wall_mu_static=0.55,
                  wall_mu_kinetic=0.35,
                  groove_deadzone=0.0,
-                 release_hysteresis=0.001,
+                 release_hysteresis=0.003,
                  local_search_window=80,
-                 exit_damping=8.0,       # N·s/m — absorbs rebound velocity
-                 exit_band=0.0015,      # m — viscous layer inside wall
+                 exit_damping=15.0,      # N·s/m — absorbs rebound velocity
+                 exit_band=0.004,       # m — viscous layer inside wall
                  guidance_fade_start=0.55,
                  guidance_fade_end=0.90,
                  total_f_max=2.5
