@@ -1,0 +1,17 @@
+{
+  "run_id": 1774616567,
+  "participant_count": 5,
+  "starting_participant_index": 1,
+  "required_demos_target": 10,
+  "conditions_per_participant": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "n_completed_trials": 1,
+  "completed_participants": [
+    "P01"
+  ]
+}

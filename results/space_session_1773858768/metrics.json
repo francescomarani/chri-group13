@@ -1,0 +1,10 @@
+[
+  {
+    "min_approach_dist": 0.0,
+    "capture_time": 531,
+    "deposit_time": 931,
+    "path_length": 0.7216794027118268,
+    "task_success": true,
+    "condition": "haply"
+  }
+]

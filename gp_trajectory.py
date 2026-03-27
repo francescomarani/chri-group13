@@ -19,8 +19,10 @@ Pipeline
 """
 
 import numpy as np
+import warnings
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
+from sklearn.exceptions import ConvergenceWarning
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -49,7 +51,7 @@ class TrajectoryGP:
     MAX_TOTAL_PTS = 200  # keep total training points under this for speed
 
     def __init__(self, length_scale=0.1, noise_level=1e-4):
-        kernel = (ConstantKernel(1.0, (1e-3, 1e3))
+        kernel = (ConstantKernel(1.0, (1e-5, 1e3))
                   * RBF(length_scale=length_scale, length_scale_bounds=(1e-3, 1e1))
                   + WhiteKernel(noise_level=noise_level, noise_level_bounds=(1e-8, 1e0)))
         self.gp_x = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=2)
@@ -87,8 +89,16 @@ class TrajectoryGP:
         X = np.concatenate(all_x)
         Y = np.concatenate(all_y)
 
-        self.gp_x.fit(S, X)
-        self.gp_y.fit(S, Y)
+        # This warning is common with short/noisy demonstrations and does not
+        # indicate a failed fit for our use case. Keep other warnings visible.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*constant_value is close to the specified lower bound.*",
+                category=ConvergenceWarning,
+            )
+            self.gp_x.fit(S, X)
+            self.gp_y.fit(S, Y)
         self._fitted = True
         self.n_demos = len(demonstrations)
 

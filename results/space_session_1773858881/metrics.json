@@ -1,0 +1,10 @@
+[
+  {
+    "min_approach_dist": 0.009199271263515836,
+    "capture_time": 12,
+    "deposit_time": -1,
+    "path_length": 2.764245934129751,
+    "task_success": false,
+    "condition": "haply_haptics"
+  }
+]

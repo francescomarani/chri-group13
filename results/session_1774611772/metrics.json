@@ -1,0 +1,233 @@
+[
+  {
+    "demo_mnd": 0.0032668578146423407,
+    "demo_hausdorff": 0.010048835581889183,
+    "demo_frechet": 0.010051028324990495,
+    "demo_dtw": 0.001999905601745135,
+    "gp_mnd": 0.0032449387974844593,
+    "gp_hausdorff": 0.009606080225867642,
+    "gp_frechet": 0.009606080225867642,
+    "gp_dtw": 0.0017778420095461254,
+    "demo_length": 0.1320481361762158,
+    "gp_length": 0.1291815403258197,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 1,
+    "demo_times": [
+      7.533866882324219
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.003055685928407432,
+    "demo_hausdorff": 0.010048835581889183,
+    "demo_frechet": 0.054281390972829816,
+    "demo_dtw": 0.008915684525444367,
+    "gp_mnd": 0.0029797127079894768,
+    "gp_hausdorff": 0.0061450465458071785,
+    "gp_frechet": 0.006150129798031192,
+    "gp_dtw": 0.0017859985566534803,
+    "demo_length": 0.3302028851464024,
+    "gp_length": 0.11975861056662569,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 2,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.0029759379107886356,
+    "demo_hausdorff": 0.010048835581889183,
+    "demo_frechet": 0.05484634076133129,
+    "demo_dtw": 0.013677757897283338,
+    "gp_mnd": 0.0031512586551622358,
+    "gp_hausdorff": 0.006433419163965137,
+    "gp_frechet": 0.006433419163965137,
+    "gp_dtw": 0.0019408125007867605,
+    "demo_length": 0.5358404633360714,
+    "gp_length": 0.11955663406036322,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 3,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467,
+      8.487669706344604
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187,
+      0.002830709891482839
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.0028833325968180682,
+    "demo_hausdorff": 0.010048835581889183,
+    "demo_frechet": 0.05492847306487491,
+    "demo_dtw": 0.014894379662165383,
+    "gp_mnd": 0.0028334752941118037,
+    "gp_hausdorff": 0.005907161564425484,
+    "gp_frechet": 0.005913714962191063,
+    "gp_dtw": 0.001770687093303077,
+    "demo_length": 0.7283208685597677,
+    "gp_length": 0.11343224410558755,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 4,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467,
+      8.487669706344604,
+      7.859395980834961
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187,
+      0.002830709891482839,
+      0.0025954083283814123
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.0035336025706273633,
+    "demo_hausdorff": 0.0333202967008133,
+    "demo_frechet": 0.05491098176057163,
+    "demo_dtw": 0.0173835088544154,
+    "gp_mnd": 0.00298555721435545,
+    "gp_hausdorff": 0.008878754447520853,
+    "gp_frechet": 0.00887827534693847,
+    "gp_dtw": 0.001955849294449018,
+    "demo_length": 1.3421128493497614,
+    "gp_length": 0.10392744167216265,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 5,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467,
+      8.487669706344604,
+      7.859395980834961,
+      7.096783399581909
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187,
+      0.002830709891482839,
+      0.0025954083283814123,
+      0.006474940010299638
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.003286601852557621,
+    "demo_hausdorff": 0.0333202967008133,
+    "demo_frechet": 0.058973911603258655,
+    "demo_dtw": 0.016212272150035515,
+    "gp_mnd": 0.0022965117717439437,
+    "gp_hausdorff": 0.006987223725970914,
+    "gp_frechet": 0.006993659956033794,
+    "gp_dtw": 0.0014796275146356096,
+    "demo_length": 1.5774291488897465,
+    "gp_length": 0.10575269425051548,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 6,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467,
+      8.487669706344604,
+      7.859395980834961,
+      7.096783399581909,
+      7.920137166976929
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187,
+      0.002830709891482839,
+      0.0025954083283814123,
+      0.006474940010299638,
+      0.0020295446266669678
+    ],
+    "hardware_connected": true
+  },
+  {
+    "demo_mnd": 0.0033473396433070903,
+    "demo_hausdorff": 0.0333202967008133,
+    "demo_frechet": 0.058930836631645854,
+    "demo_dtw": 0.01656799692720624,
+    "gp_mnd": 0.0026028764959648587,
+    "gp_hausdorff": 0.0071760188221248866,
+    "gp_frechet": 0.007184030057297202,
+    "gp_dtw": 0.0017408517375938318,
+    "demo_length": 1.7777864781362651,
+    "gp_length": 0.10788978380476621,
+    "target_length": 0.11428401343924717,
+    "condition_id": 5,
+    "condition": "haply_increasing_learned_guidance",
+    "condition_label": "Haply device, increasing learned guidance",
+    "input_mode": "device",
+    "feedback_mode": "increasing_learned_guidance",
+    "tube": "s_curve",
+    "n_demos": 7,
+    "demo_times": [
+      7.533866882324219,
+      9.811675548553467,
+      8.487669706344604,
+      7.859395980834961,
+      7.096783399581909,
+      7.920137166976929,
+      6.083935976028442
+    ],
+    "per_demo_mnd": [
+      0.0032668578146423407,
+      0.0028835203141522187,
+      0.002830709891482839,
+      0.0025954083283814123,
+      0.006474940010299638,
+      0.0020295446266669678,
+      0.00382677451936193
+    ],
+    "hardware_connected": true
+  }
+]

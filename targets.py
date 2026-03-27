@@ -18,6 +18,22 @@ import numpy as np
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Narrower than the original template, but compressed to stay reachable with
+# the physical Haply workspace.
+DEFAULT_HALF_WIDTH = 0.007
+DEFAULT_CX = 0.0
+DEFAULT_CY = 0.055
+
+
+def _compress_about_center(centerline, sx=1.0, sy=1.0):
+    """Scale a curve about its centroid to keep it inside the haptic workspace."""
+    pts = np.asarray(centerline, dtype=float)
+    pivot = pts.mean(axis=0)
+    scaled = pts.copy()
+    scaled[:, 0] = pivot[0] + sx * (scaled[:, 0] - pivot[0])
+    scaled[:, 1] = pivot[1] + sy * (scaled[:, 1] - pivot[1])
+    return scaled
+
 def _normals(centerline):
     """Compute unit normals (pointing left) at each point of the centerline."""
     # Tangent via central differences
@@ -112,18 +128,29 @@ class Tube:
 
 # ─── Tube generators ───────────────────────────────────────────────────────
 
-def s_curve_tube(half_width=0.012, n=400, cx=0.0, cy=0.06):
+def s_curve_tube(half_width=DEFAULT_HALF_WIDTH, n=400, cx=DEFAULT_CX, cy=DEFAULT_CY):
     """
-    S-shaped curved tube — goes from top-left to bottom-right
-    with two smooth bends.
+    Multi-bend S tube with monotonic progression in y.
+
+    Designed to stay challenging without creating self-overlaps or visually
+    ambiguous near-intersections between the two walls.
     """
-    t = np.linspace(0, np.pi, n)
-    amplitude = 0.04  # horizontal span
-    height = 0.08     # vertical span
-    x = cx + amplitude * np.sin(t)
-    y = cy - height / 2 + (height / n) * np.arange(n)
-    centerline = np.column_stack([x, y])
-    centerline = _smooth(centerline, sigma=5)
+    waypoints = np.array([
+        [cx + 0.022, cy - 0.050],
+        [cx - 0.038, cy - 0.036],
+        [cx - 0.030, cy - 0.016],
+        [cx + 0.020, cy - 0.002],
+        [cx + 0.032, cy + 0.016],
+        [cx - 0.010, cy + 0.032],
+        [cx - 0.026, cy + 0.048],
+        [cx + 0.006, cy + 0.060],
+    ])
+    t_wp = np.linspace(0, 1, len(waypoints))
+    t_fine = np.linspace(0, 1, n)
+    x = np.interp(t_fine, t_wp, waypoints[:, 0])
+    y = np.interp(t_fine, t_wp, waypoints[:, 1])
+    centerline = _smooth(np.column_stack([x, y]), sigma=7)
+    centerline = _compress_about_center(centerline, sx=0.84, sy=0.74)
     return Tube(centerline, half_width)
 
 # def s_curve_tube(half_width=0.012, n=400, cx=0.0, cy=0.06):
@@ -141,38 +168,41 @@ def s_curve_tube(half_width=0.012, n=400, cx=0.0, cy=0.06):
 
 
 
-def spiral_tube(half_width=0.012, n=500, cx=0.0, cy=0.06):
+def spiral_tube(half_width=DEFAULT_HALF_WIDTH, n=500, cx=DEFAULT_CX, cy=DEFAULT_CY):
     """
     Spiral tube — wraps around ~1.5 turns, getting tighter.
     """
     t = np.linspace(0, 3 * np.pi, n)
-    r_start, r_end = 0.045, 0.015
+    r_start, r_end = 0.034, 0.012
     r = np.linspace(r_start, r_end, n)
     x = cx + r * np.cos(t)
     y = cy + r * np.sin(t)
     centerline = np.column_stack([x, y])
+    centerline = _compress_about_center(centerline, sx=0.92, sy=0.82)
     return Tube(centerline, half_width)
 
 
-def zigzag_tube(half_width=0.012, n=400, cx=0.0, cy=0.06):
+def zigzag_tube(half_width=DEFAULT_HALF_WIDTH, n=400, cx=DEFAULT_CX, cy=DEFAULT_CY):
     """
     Zigzag tube — sharp turns that require careful navigation.
     """
     # Build waypoints
-    amp = 0.035
+    amp = 0.034
     waypoints = np.array([
-        [cx - amp, cy - 0.04],
-        [cx + amp, cy - 0.02],
-        [cx - amp, cy],
-        [cx + amp, cy + 0.02],
-        [cx - amp, cy + 0.04],
+        [cx - amp, cy - 0.032],
+        [cx + amp, cy - 0.020],
+        [cx - 0.8 * amp, cy - 0.004],
+        [cx + 0.95 * amp, cy + 0.010],
+        [cx - amp, cy + 0.022],
+        [cx - amp, cy + 0.032],
     ])
     # Interpolate smoothly
     t_wp = np.linspace(0, 1, len(waypoints))
     t_fine = np.linspace(0, 1, n)
     x = np.interp(t_fine, t_wp, waypoints[:, 0])
     y = np.interp(t_fine, t_wp, waypoints[:, 1])
-    centerline = _smooth(np.column_stack([x, y]), sigma=8)
+    centerline = _smooth(np.column_stack([x, y]), sigma=6)
+    centerline = _compress_about_center(centerline, sx=0.90, sy=0.80)
     return Tube(centerline, half_width)
 
 def _rotate_centerline(centerline, angle_deg):
@@ -184,7 +214,7 @@ def _rotate_centerline(centerline, angle_deg):
         R = np.array([[c, -s], [s, c]])
         return (pts - pivot) @ R.T + pivot
     
-def s_curve_tube_rotated(angle_deg, half_width=0.012, n=400, cx=0.0, cy=0.06):
+def s_curve_tube_rotated(angle_deg, half_width=DEFAULT_HALF_WIDTH, n=400, cx=DEFAULT_CX, cy=DEFAULT_CY):
     base = s_curve_tube(half_width=half_width, n=n, cx=cx, cy=cy)
     rotated_cl = _rotate_centerline(base.centerline, angle_deg)
     return Tube(rotated_cl, half_width)

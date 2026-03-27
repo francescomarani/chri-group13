@@ -1,0 +1,17 @@
+{
+  "run_id": 1774617856,
+  "participant_id": "P01",
+  "participant_index": 1,
+  "participant_count": 2,
+  "mode": "validation",
+  "required_demos_target": 4,
+  "tube": "s_curve",
+  "condition_id": 2,
+  "condition": "haply_no_feedback",
+  "condition_label": "Haply device, no feedback",
+  "input_mode": "device",
+  "feedback_mode": "none",
+  "hardware_connected": true,
+  "n_demos": 0,
+  "demo_files": []
+}

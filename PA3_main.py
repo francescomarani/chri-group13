@@ -1,31 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-PA3 — Condition 1: Kinesthetic Teaching — Tube Navigation
-----------------------------------------------------------
-Navigate a curved tube from START to END without touching the walls.
+PA3 — Kinesthetic Teaching for Hull-Breach Sealing
+--------------------------------------------------
+Six explicit experimental conditions are supported:
 
-Left panel  = Haptic view (pantograph + tube + force feedback)
-Right panel = VR view (tube + all demos + GP reproduction)
-
-Keys:
-  SPACE   start/stop recording
-  ENTER   next demo (REVIEW) / add more demos (DONE)
-  D       delete last recorded demo (REVIEW)
-  G       train GP on all demos
-  P       replay GP trajectory (DONE)
-  N       NASA-TLX (DONE)
-  H       toggle groove guidance on/off
-  W       toggle virtual walls on/off
-  T       cycle tube shape (IDLE, no demos)
-  C       clear all
-  R       toggle linkages
-  Q       quit
+1. Mouse only, no haptics
+2. Haply device, no feedback
+3. Haply device, virtual walls only
+4. Haply device, fixed centerline guidance
+5. Haply device, fading centerline guidance
+6. Haply device, increasing learned-trajectory guidance
 """
 
+import argparse
 import sys, time, os, json
+from pathlib import Path
+import tempfile
 import numpy as np
 import pygame
-from tomlkit import key
+
+if "MPLCONFIGDIR" not in os.environ:
+    mpl_dir = Path(tempfile.gettempdir()) / "matplotlib-codex"
+    mpl_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(mpl_dir)
+
+THIS_DIR = Path(__file__).resolve().parent
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
 
 from Physics import Physics
 from Graphics import Graphics
@@ -44,14 +45,152 @@ DEMO_COLORS = [
     (100, 200, 60), (200, 60, 160),
 ]
 
+CONDITION_SPECS = {
+    1: {
+        "slug": "mouse_only_no_haptics",
+        "label": "Mouse only, no haptics",
+        "input_mode": "mouse",
+        "feedback_mode": "none",
+        "walls": False,
+        "centerline": False,
+        "centerline_fading": False,
+        "learned_guidance": False,
+        "auto_retrain": False,
+    },
+    2: {
+        "slug": "haply_no_feedback",
+        "label": "Haply device, no feedback",
+        "input_mode": "device",
+        "feedback_mode": "none",
+        "walls": False,
+        "centerline": False,
+        "centerline_fading": False,
+        "learned_guidance": False,
+        "auto_retrain": False,
+    },
+    3: {
+        "slug": "haply_virtual_walls_only",
+        "label": "Haply device, virtual walls only",
+        "input_mode": "device",
+        "feedback_mode": "walls_only",
+        "walls": True,
+        "centerline": False,
+        "centerline_fading": False,
+        "learned_guidance": False,
+        "auto_retrain": False,
+    },
+    4: {
+        "slug": "haply_fixed_centerline_guidance",
+        "label": "Haply device, fixed central guide",
+        "input_mode": "device",
+        "feedback_mode": "fixed_centerline_guidance",
+        "walls": False,
+        "centerline": True,
+        "centerline_fading": False,
+        "learned_guidance": False,
+        "auto_retrain": False,
+    },
+    5: {
+        "slug": "haply_fading_centerline_guidance",
+        "label": "Haply device, fading central guide",
+        "input_mode": "device",
+        "feedback_mode": "fading_centerline_guidance",
+        "walls": False,
+        "centerline": False,
+        "centerline_fading": True,
+        "learned_guidance": False,
+        "auto_retrain": False,
+    },
+    6: {
+        "slug": "haply_increasing_learned_guidance",
+        "label": "Haply device, increasing learned guidance",
+        "input_mode": "device",
+        "feedback_mode": "increasing_learned_guidance",
+        "walls": False,
+        "centerline": False,
+        "centerline_fading": False,
+        "learned_guidance": True,
+        "auto_retrain": False,
+    },
+}
+
+
+def _prompt_positive_int(prompt_text, default=None):
+    while True:
+        suffix = f" [{default}]" if default is not None else ""
+        raw = input(f"{prompt_text}{suffix}: ").strip()
+        if not raw and default is not None:
+            return int(default)
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+        print("Please enter a positive integer.")
+
+
+def _prompt_text(prompt_text, default=None):
+    suffix = f" [{default}]" if default else ""
+    raw = input(f"{prompt_text}{suffix}: ").strip()
+    return raw or default
+
+
+def parse_runtime_config():
+    parser = argparse.ArgumentParser(description="PA3 Hull-Breach Teaching")
+    parser.add_argument("--mode", choices=["free", "validation"], default="free")
+    parser.add_argument("--participant-count", type=int, default=None)
+    parser.add_argument("--required-demos", type=int, default=None)
+    parser.add_argument("--results-dir", default="results")
+    parser.add_argument("--analysis-dir", default="analysis")
+    args = parser.parse_args()
+
+    if args.participant_count is not None and args.participant_count <= 0:
+        parser.error("--participant-count must be > 0")
+    if args.required_demos is not None and args.required_demos <= 0:
+        parser.error("--required-demos must be > 0")
+
+    if args.mode == "validation":
+        if args.participant_count is None:
+            args.participant_count = _prompt_positive_int("Total number of participants", default=1)
+        if args.required_demos is None:
+            args.required_demos = _prompt_positive_int(
+                "Number of demonstrations required before training", default=3
+            )
+    else:
+        args.participant_count = 1
+        args.required_demos = args.required_demos or 0
+
+    return args
+
 
 class PA3_Kinesthetic:
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
+        self.mode = config.mode
+        self.validation_mode = (self.mode == "validation")
+        self.required_demos = int(config.required_demos or 0)
+        self.participant_count = int(config.participant_count or 1)
+        self.current_participant_offset = 0
+        self.participant_number = 1
+        self.results_dir = Path(config.results_dir)
+        self.analysis_dir = Path(config.analysis_dir)
+        self.run_id = int(time.time())
+        self.session_id = self.run_id
+        self.validation_root = self.results_dir / f"validation_run_{self.run_id}"
+        self.session_folder = self.results_dir / f"session_{self.session_id}"
+        self.auto_analysis_status = None
+        self.pending_validation_finalize = False
+        self.validation_complete = False
+        self.condition_order = sorted(CONDITION_SPECS.keys())
+        self.condition_cursor = 0
+        self.run_results = []
+
         self.physics = Physics(hardware_version=3)
         self.device_connected = self.physics.is_device_connected()
         self.graphics = Graphics(self.device_connected, window_size=(760, 720))
         self.graphics.show_debug = False
-        pygame.display.set_caption("PA3 — Kinesthetic Teaching (Tube)")
+        pygame.display.set_caption("PA3 — Kinesthetic Teaching (Mars Crack)")
 
         # ── Tube ──
         self.tube_idx = 0
@@ -64,10 +203,12 @@ class PA3_Kinesthetic:
         self.all_demos = []
         self.all_demo_times = []
         self.per_demo_metrics = []
+        self.per_demo_wall_hits = []
         self.current_demo = []
         self.start_time = 0.0
         self.last_demo_time = 0.0
         self.wall_hits = 0
+        self.wall_contact_active = False
         self.auto_train = False
 
 
@@ -86,6 +227,230 @@ class PA3_Kinesthetic:
         self.pd_kd = 50.0       # N·s/m — velocity damping
         self.pd_speed = 0.75
         self.prev_ee_phys = None      # was missing — needed by _compute_pd_force
+        self.condition_id = self.condition_order[self.condition_cursor]
+        self.condition_spec = None
+        self._apply_condition(self.condition_id)
+
+    def _participant_label(self):
+        return f"participant_{self.participant_number:02d}"
+
+    def _current_participant_dir(self):
+        if self.validation_mode:
+            return self.validation_root / self._participant_label()
+        return self.session_folder
+
+    def _current_condition_dir(self):
+        if self.validation_mode:
+            return self._current_participant_dir() / f"condition_{self.condition_id}_{self.condition_spec['slug']}"
+        return self.session_folder
+
+    def _reset_condition_state(self):
+        self.state = IDLE
+        self.all_demos = []
+        self.all_demo_times = []
+        self.per_demo_metrics = []
+        self.per_demo_wall_hits = []
+        self.current_demo = []
+        self.start_time = 0.0
+        self.last_demo_time = 0.0
+        self.wall_hits = 0
+        self.wall_contact_active = False
+        self.auto_train = False
+        self.pending_validation_finalize = False
+        self.gp_traj_phys = None
+        self.gp_traj_std = None
+        self.playback_idx = 0
+        self.trial_metrics = None
+        self.tlx_result = None
+        self.auto_ref_idx = 0.0
+        self.prev_ee_phys = None
+        self.haptics.reset_proxy()
+        self.haptics.clear_gp_trajectory()
+
+    def _save_participant_summary(self):
+        if not self.validation_mode or not self.all_results:
+            return
+        participant_dir = self._current_participant_dir()
+        participant_dir.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "run_id": self.run_id,
+            "participant_number": self.participant_number,
+            "participant_count": self.participant_count,
+            "required_demos_target": self.required_demos,
+            "n_conditions_completed": len(self.all_results),
+            "conditions_completed": [result["condition"] for result in self.all_results],
+        }
+        with open(participant_dir / "participant_summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
+        with open(participant_dir / "metrics.json", "w") as f:
+            json.dump(self.all_results, f, indent=2, default=str)
+
+    def _save_validation_run_summary(self):
+        if not self.validation_mode:
+            return
+        self.validation_root.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "run_id": self.run_id,
+            "participant_count": self.participant_count,
+            "required_demos_target": self.required_demos,
+            "conditions_per_participant": self.condition_order,
+            "n_completed_trials": len(self.run_results),
+            "completed_participants": sorted({row["participant_number"] for row in self.run_results}),
+        }
+        with open(self.validation_root / "run_summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
+        with open(self.validation_root / "all_metrics.json", "w") as f:
+            json.dump(self.run_results, f, indent=2, default=str)
+
+    def _advance_validation_sequence(self):
+        if not self.validation_mode:
+            return
+        self.condition_cursor += 1
+        if self.condition_cursor < len(self.condition_order):
+            next_cond = self.condition_order[self.condition_cursor]
+            self._reset_condition_state()
+            self._apply_condition(next_cond)
+            self.auto_analysis_status = (
+                f"Participant {self.participant_number}: ready for condition {self.condition_id}/{len(self.condition_order)}."
+            )
+            return
+
+        self._save_participant_summary()
+        self.current_participant_offset += 1
+        if self.current_participant_offset < self.participant_count:
+            self.participant_number = self.current_participant_offset + 1
+            self.condition_cursor = 0
+            self.all_results = []
+            self._reset_condition_state()
+            self._apply_condition(self.condition_order[self.condition_cursor])
+            self.auto_analysis_status = (
+                f"Participant {self.participant_number} ready. Start condition {self.condition_id}/{len(self.condition_order)}."
+            )
+            return
+
+        self.validation_complete = True
+        self.state = DONE
+        self.auto_analysis_status = (
+            f"Validation complete for {self.participant_count} participants. Press Q to quit."
+        )
+        self._save_validation_run_summary()
+
+    def _apply_condition(self, condition_id):
+        spec = CONDITION_SPECS[int(condition_id)]
+        self.condition_id = int(condition_id)
+        self.condition_spec = spec
+        self.pending_validation_finalize = False
+        self.auto_analysis_status = None
+
+        self.haptics.reset_proxy()
+        self.haptics.wall_k = 140.0
+        self.haptics.wall_damping = 6.0
+        self.haptics.groove_enabled = bool(spec["centerline"])
+        self.haptics.walls_enabled = bool(spec["walls"])
+        self.haptics.fading_groove_enabled = bool(spec["centerline_fading"])
+        self.haptics.gp_groove_enabled = bool(spec["learned_guidance"])
+
+    def _can_change_condition(self):
+        if self.validation_mode:
+            return self.state == IDLE and len(self.all_demos) == 0
+        return self.state in (IDLE, REVIEW, DONE)
+
+    def _prepare_free_condition_switch(self):
+        self._reset_condition_state()
+
+    def _current_condition_label(self):
+        return self.condition_spec["label"]
+
+    def _effective_input_mode(self):
+        if self.condition_spec["input_mode"] == "mouse":
+            return "mouse"
+        return "device" if self.device_connected else "mouse_fallback"
+
+    def _feedback_active(self):
+        return self.condition_spec["feedback_mode"] != "none"
+
+    def _demos_target_reached(self):
+        return self.validation_mode and self.required_demos > 0 and len(self.all_demos) >= self.required_demos
+
+    def _can_change_mode(self):
+        return (
+            self.state == IDLE
+            and len(self.all_demos) == 0
+            and len(self.all_results) == 0
+            and self.current_participant_offset == 0
+        )
+
+    def _set_mode(self, mode):
+        mode = str(mode)
+        if mode not in ("free", "validation"):
+            return
+        self.mode = mode
+        self.validation_mode = (mode == "validation")
+        if self.validation_mode:
+            self.required_demos = max(1, int(self.required_demos or 3))
+            self.participant_count = max(1, int(self.participant_count or 1))
+        else:
+            self.required_demos = 0
+            self.participant_count = 1
+        self.current_participant_offset = 0
+        self.participant_number = 1
+        self.validation_complete = False
+        self.condition_cursor = 0
+        self.condition_order = sorted(CONDITION_SPECS.keys())
+        self.run_results = []
+        self.all_results = []
+        self._reset_condition_state()
+        self._apply_condition(self.condition_order[self.condition_cursor])
+
+    def _mode_label(self):
+        if self.validation_mode:
+            return f"validation P{self.participant_number}/{self.participant_count} ({len(self.all_demos)}/{self.required_demos} demos)"
+        return "free"
+
+    def _demo_success_rate(self, success_tol):
+        if not self.all_demos:
+            return 0.0
+        successes = 0
+        for demo in self.all_demos:
+            demo_mnd = mean_nearest_distance(demo, self.tube.centerline)
+            start_error = float(np.linalg.norm(demo[0] - self.tube.start))
+            end_error = float(np.linalg.norm(demo[-1] - self.tube.end))
+            if demo_mnd <= success_tol and start_error <= success_tol and end_error <= success_tol:
+                successes += 1
+        return float(successes / len(self.all_demos))
+
+    def _run_nasa_tlx_dialog(self):
+        self.graphics.close()
+        self.tlx_result = run_nasa_tlx()
+        self.graphics = Graphics(self.device_connected, window_size=(760, 720))
+        self.graphics.show_debug = False
+        pygame.display.set_caption("PA3 — Kinesthetic Teaching (Mars Crack)")
+        if self.all_results:
+            self.all_results[-1]["tlx"] = self.tlx_result
+
+    def _run_auto_analysis(self):
+        if not self.validation_mode:
+            return
+        try:
+            from analyze_results import run_analysis
+            run_analysis(results_dir=self.results_dir, out_dir=self.analysis_dir)
+            self.auto_analysis_status = f"Analysis updated in {self.analysis_dir}"
+        except Exception as exc:
+            self.auto_analysis_status = f"Analysis failed: {exc}"
+
+    def _finalize_validation_condition(self):
+        self._run_nasa_tlx_dialog()
+        self._save_results()
+        self._run_auto_analysis()
+        self._advance_validation_sequence()
+
+    def _mouse_panel_pos(self, mouse_pos):
+        x, y = mouse_pos
+        if x >= self.graphics.window_size[0]:
+            x -= self.graphics.window_size[0]
+        x = max(0, min(self.graphics.window_size[0] - 1, x))
+        y = max(0, min(self.graphics.window_size[1] - 1, y))
+        return np.array([x, y], dtype=float)
 
 
     # ─── Tube drawing ───────────────────────────────────────────────────
@@ -145,11 +510,15 @@ class PA3_Kinesthetic:
         right_color = (255, 50, 50) if highlight_wall == 'right' else (100, 100, 100)
 
         if draw_fill:
-            for i in range(0, len(center_pts) - 1, 2):
-                pygame.draw.line(surface, (230, 240, 230),
-                                 (int(center_pts[i][0]),   int(center_pts[i][1])),
-                                 (int(center_pts[i+1][0]), int(center_pts[i+1][1])),
-                                 int(tube.half_width * g.window_scale * 2))
+            # Fill the corridor as a single polygon; this avoids the triangular
+            # artifacts created by thick overlapping line segments on tight bends.
+            fill_poly = left_pts + list(reversed(right_pts))
+            if len(fill_poly) >= 3:
+                pygame.draw.polygon(
+                    surface,
+                    (236, 242, 236),
+                    [(int(p[0]), int(p[1])) for p in fill_poly],
+                )
 
         if draw_walls:
             if len(left_pts) > 1:
@@ -191,33 +560,34 @@ class PA3_Kinesthetic:
 
     def _draw_key_legend(self, surface):
         """Draw a compact key reference in the top-left corner of a panel."""
-        h = self.haptics
-        groove_str = "ON " if h.groove_enabled else "OFF"
-        walls_str  = "ON " if h.walls_enabled  else "OFF"
+        cond = self.condition_id
+        cond_name = self._current_condition_label()
 
         lines = [
             "── Keys ──────────────",
             "SPACE  start/stop rec",
             "ENTER  confirm/next",
-            f"D      delete last demo",
+            "D      delete last demo",
             "G      train GP",
             "P      replay GP",
             "A      auto-reproduce GP",
-            f"W      walls   [{walls_str}]",
-            f"H      groove  [{groove_str}]",
-            f"K      GP groove [{' ON' if h.gp_groove_enabled else 'OFF'}]",
-            f"J      fading groove [{' ON' if h.fading_groove_enabled else 'OFF'}]",
-            "1-4    s_curve orient",
+            f"COND   [{cond}] {cond_name}",
+            (
+                "1-6    select condition"
+                if not self.validation_mode else "COND   automatic sequence"
+            ),
+            "M      toggle mode",
             "T      change tube",
             "C      clear all",
             "Q      quit",
+            f"MODE   {self._mode_label()}",
         ]
 
         font = pygame.font.SysFont("Courier", 13)
         x, y = 8, 8
         pad = 4
         line_h = font.get_linesize()
-        box_w = 220
+        box_w = 260
         box_h = len(lines) * line_h + pad * 2
 
         # Semi-transparent background
@@ -234,17 +604,7 @@ class PA3_Kinesthetic:
     def run(self):
         p = self.physics
         g = self.graphics
-
         keyups, xm = g.get_events()
-
-        if self.device_connected:
-            pA0, pB0, pA, pB, pE = p.get_device_pos()
-            pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
-        else:
-            xh = g.haptic.center
-
-        xh = np.array(xh, dtype=float)
-        g.erase_screen()
 
         # ── Keyboard ────────────────────────────────────────────────────
         for key in keyups:
@@ -252,64 +612,55 @@ class PA3_Kinesthetic:
                 self._save_results()
                 sys.exit(0)
 
+            if self.validation_complete:
+                continue
+
             if key == ord('r'):
                 g.show_linkages = not g.show_linkages
 
-            # # H → toggle groove guidance
-            if key == ord('h'):
-                self.haptics.groove_enabled = not self.haptics.groove_enabled
-                if self.haptics.groove_enabled:
-                    self.haptics.gp_groove_enabled = False  
-                    self.haptics.fading_groove_enabled = False
+            if key == ord('m'):
+                if self._can_change_mode():
+                    self._set_mode("free" if self.validation_mode else "validation")
+                    self.auto_analysis_status = f"Mode changed to {self.mode}."
+                else:
+                    self.auto_analysis_status = "Mode can only change from a clean idle state."
 
-
-            # K → toggle GP groove
-            if key == ord('k'):
-                self.haptics.gp_groove_enabled = not self.haptics.gp_groove_enabled
-                if self.haptics.gp_groove_enabled:
-                    self.haptics.groove_enabled = False    
-                    self.haptics.fading_groove_enabled = False
-
-            # J → fading centerline groove
-            if key == ord('j'):
-                self.haptics.fading_groove_enabled = not self.haptics.fading_groove_enabled
-                if self.haptics.fading_groove_enabled:
-                    self.haptics.groove_enabled      = False
-                    self.haptics.gp_groove_enabled   = False
-
-            # W → toggle virtual walls
-            if key == ord('w'):
-                self.haptics.walls_enabled = not self.haptics.walls_enabled
-                if not self.haptics.walls_enabled:
-                    self.haptics.reset_proxy()
+            if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6')):
+                if self.validation_mode:
+                    self.auto_analysis_status = "Validation mode advances conditions automatically."
+                elif self._can_change_condition():
+                    self._prepare_free_condition_switch()
+                    self._apply_condition(int(chr(key)))
+                    if self.condition_id == 3:
+                        self.auto_analysis_status = "Condition 3 selected: virtual walls are active."
+                    else:
+                        self.auto_analysis_status = (
+                            f"Condition {self.condition_id} selected. Note: walls are only active in condition 3."
+                        )
 
             # T → cycle tube (only when idle and no demos)
-            if key == ord('t') and self.state == IDLE and len(self.all_demos) == 0:
-                self.tube_idx = (self.tube_idx + 1) % len(TUBE_NAMES)
-                self.tube_name = TUBE_NAMES[self.tube_idx]
-                self.tube = get_tube(self.tube_name)
-                self.haptics = TubeHaptics(self.tube)
-                self.haptics.reset_proxy()
-
-            # 1–4 → select s_curve orientation directly
-            _orientation_map = {
-                ord('1'): "s_curve",
-                ord('2'): "s_curve_90",
-                ord('3'): "s_curve_180",
-                ord('4'): "s_curve_270",
-            }
-            if key in _orientation_map and self.state == IDLE and len(self.all_demos) == 0:
-                self.tube_name = _orientation_map[key]
-                self.tube = get_tube(self.tube_name)
-                self.haptics = TubeHaptics(self.tube)
-                self.haptics.reset_proxy()
+            if key == ord('t') and self._can_change_condition():
+                if self.validation_mode:
+                    self.auto_analysis_status = "Validation mode keeps the crack geometry fixed."
+                else:
+                    self.tube_idx = (self.tube_idx + 1) % len(TUBE_NAMES)
+                    self.tube_name = TUBE_NAMES[self.tube_idx]
+                    self.tube = get_tube(self.tube_name)
+                    self.haptics = TubeHaptics(self.tube)
+                    self._apply_condition(self.condition_id)
             
 
             if key == pygame.K_SPACE:
                 if self.state == IDLE:
+                    if self._demos_target_reached():
+                        self.auto_analysis_status = (
+                            f"Validation target reached: train condition after {self.required_demos} demos."
+                        )
+                        continue
                     self.state = RECORDING
                     self.current_demo = []
                     self.wall_hits = 0
+                    self.wall_contact_active = False
                     self.start_time = time.time()
                 elif self.state == RECORDING:
                     self.last_demo_time = time.time() - self.start_time
@@ -319,9 +670,11 @@ class PA3_Kinesthetic:
                         self.all_demo_times.append(self.last_demo_time)
                         mnd = mean_nearest_distance(demo_arr, self.tube.centerline)
                         self.per_demo_metrics.append(mnd)
+                        self.per_demo_wall_hits.append(int(self.wall_hits))
                         self.state = REVIEW
                     else:
                         self.state = IDLE
+                    self.wall_contact_active = False
 
             # D → delete last demo (only in REVIEW)
             if key == ord('d') and self.state == REVIEW:
@@ -329,16 +682,18 @@ class PA3_Kinesthetic:
                     self.all_demos.pop()
                     self.all_demo_times.pop()
                     self.per_demo_metrics.pop()
+                    self.per_demo_wall_hits.pop()
                 self.current_demo = []
                 self.state = IDLE
 
             if key == pygame.K_RETURN:
                 if self.state == REVIEW:
-                    if (self.haptics.gp_groove_enabled or self.haptics.fading_groove_enabled) and len(self.all_demos) >= 1:
-                        self.auto_train = True    # K is on → silent retrain then back to IDLE
+                    if self.validation_mode and self._demos_target_reached():
+                        self.auto_train = True
+                        self.pending_validation_finalize = True
                         self.state = TRAINING
                     else:
-                        self.state = IDLE         # K is off → behaves exactly as before
+                        self.state = IDLE
                 elif self.state == DONE:
                     self.gp_traj_phys = None
                     self.gp_traj_std = None
@@ -347,20 +702,21 @@ class PA3_Kinesthetic:
 
 
             if key == ord('g') and self.state in (IDLE, REVIEW) and len(self.all_demos) >= 1:
-                self.state = TRAINING
+                if self.validation_mode and not self._demos_target_reached():
+                    self.auto_analysis_status = (
+                        f"Validation mode requires {self.required_demos} demos before training."
+                    )
+                else:
+                    self.auto_train = self.validation_mode
+                    self.pending_validation_finalize = self.validation_mode
+                    self.state = TRAINING
 
             if key == ord('p') and self.state == DONE:
                 self.playback_idx = 0
                 self.state = PLAYBACK
 
             if key == ord('n') and self.state == DONE:
-                g.close()
-                self.tlx_result = run_nasa_tlx()
-                self.graphics = Graphics(self.device_connected, window_size=(800, 800))
-                self.graphics.show_debug = False
-                pygame.display.set_caption("PA3 — Kinesthetic Teaching (Tube)")
-                if self.all_results:
-                    self.all_results[-1]["tlx"] = self.tlx_result
+                self._run_nasa_tlx_dialog()
                 g = self.graphics
                 g.erase_screen()
                 return
@@ -369,12 +725,17 @@ class PA3_Kinesthetic:
                 self.all_demos = []
                 self.all_demo_times = []
                 self.per_demo_metrics = []
+                self.per_demo_wall_hits = []
                 self.current_demo = []
                 self.gp_traj_phys = None
                 self.gp_traj_std = None
                 self.trial_metrics = None
                 self.haptics.reset_proxy()
                 self.haptics.clear_gp_trajectory()
+                self.wall_hits = 0
+                self.wall_contact_active = False
+                self.pending_validation_finalize = False
+                self.auto_analysis_status = None
                 self.state = IDLE
 
             # A → start autonomous GP reproduction (only when GP is trained)
@@ -383,10 +744,32 @@ class PA3_Kinesthetic:
                 self.prev_ee_phys = None
                 self.state = AUTO_PLAY
 
+        frame_input_mode = self._effective_input_mode()
+        frame_feedback_active = self._feedback_active()
+        g.device_connected = (frame_input_mode == "device")
+
+        if frame_input_mode == "device":
+            pA0, pB0, pA, pB, pE = p.get_device_pos()
+            pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
+        else:
+            if self.condition_spec["feedback_mode"] == "none":
+                xh = self._mouse_panel_pos(xm)
+            else:
+                xh = g.haptic.center
+            pos_phys_s = g.inv_convert_pos(xh)
+            pA0, pB0, pA, pB, pE = p.derive_device_pos(pos_phys_s)
+            pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
+
+        xh = np.array(xh, dtype=float)
+        g.erase_screen()
+
 
         pos_phys = np.array(g.inv_convert_pos(xh), dtype=float)
 
-        if self.state == AUTO_PLAY and self.gp_traj_phys is not None:
+        if not frame_feedback_active:
+            fe_phys = np.zeros(2)
+            fe = np.zeros(2)
+        elif self.state == AUTO_PLAY and self.gp_traj_phys is not None:
             fe_phys = self._compute_pd_force(pos_phys, dt=1.0 / g.FPS)
             fe = np.array([fe_phys[0], -fe_phys[1]])
         else:
@@ -394,9 +777,14 @@ class PA3_Kinesthetic:
             fe = np.array([fe_phys[0], -fe_phys[1]])
 
 
-        # Track wall hits
-        if self.state == RECORDING and self.haptics.last_penetration > 0:
-            self.wall_hits += 1
+        # Track discrete wall-contact events instead of counting every frame
+        if self.state == RECORDING:
+            in_wall_contact = self.haptics.last_penetration > 0
+            if in_wall_contact and not self.wall_contact_active:
+                self.wall_hits += 1
+            self.wall_contact_active = in_wall_contact
+        else:
+            self.wall_contact_active = False
 
         # ── Record ──────────────────────────────────────────────────────
         if self.state == RECORDING:
@@ -425,15 +813,54 @@ class PA3_Kinesthetic:
                 self.trial_metrics = compute_all_metrics(
                     np.concatenate(self.all_demos),
                     self.gp_traj_phys, self.tube.centerline)
-                self.trial_metrics["condition"] = "kinesthetic"
+                success_tol = float(self.tube.half_width)
+                total_demo_time = float(sum(self.all_demo_times))
+                mean_demo_time = float(np.mean(self.all_demo_times)) if self.all_demo_times else 0.0
+                wall_hits_total = int(sum(self.per_demo_wall_hits))
+                wall_hits_mean = float(np.mean(self.per_demo_wall_hits)) if self.per_demo_wall_hits else 0.0
+                gp_success = (
+                    self.trial_metrics["gp_mnd"] <= success_tol
+                    and self.trial_metrics["gp_start_error"] <= success_tol
+                    and self.trial_metrics["gp_end_error"] <= success_tol
+                )
+
+                self.trial_metrics["participant_number"] = self.participant_number
+                self.trial_metrics["participant_count"] = self.participant_count
+                self.trial_metrics["mode"] = self.mode
+                self.trial_metrics["required_demos_target"] = self.required_demos if self.validation_mode else None
+                self.trial_metrics["trial_index"] = len(self.all_results) + 1
+                self.trial_metrics["condition_id"] = self.condition_id
+                self.trial_metrics["condition"] = self.condition_spec["slug"]
+                self.trial_metrics["condition_label"] = self.condition_spec["label"]
+                self.trial_metrics["input_mode"] = self._effective_input_mode()
+                self.trial_metrics["feedback_mode"] = self.condition_spec["feedback_mode"]
                 self.trial_metrics["tube"] = self.tube_name
                 self.trial_metrics["n_demos"] = len(self.all_demos)
                 self.trial_metrics["demo_times"] = self.all_demo_times.copy()
+                self.trial_metrics["mean_demo_time_s"] = mean_demo_time
+                self.trial_metrics["total_demo_time_s"] = total_demo_time
+                self.trial_metrics["completion_time_s"] = total_demo_time
+                self.trial_metrics["last_demo_time_s"] = float(self.last_demo_time)
                 self.trial_metrics["per_demo_mnd"] = self.per_demo_metrics.copy()
+                self.trial_metrics["per_demo_wall_hits"] = self.per_demo_wall_hits.copy()
+                self.trial_metrics["wall_hit_events_total"] = wall_hits_total
+                self.trial_metrics["wall_hit_events_mean"] = wall_hits_mean
+                self.trial_metrics["success_tolerance_m"] = success_tol
+                self.trial_metrics["demo_success_rate"] = self._demo_success_rate(success_tol)
+                self.trial_metrics["gp_success"] = bool(gp_success)
+                self.trial_metrics["success"] = bool(gp_success)
+                self.trial_metrics["hardware_connected"] = self.device_connected
                 self.all_results.append(self.trial_metrics.copy())
+                if self.validation_mode:
+                    self.run_results.append(self.trial_metrics.copy())
 
                 if self.auto_train:
                     self.auto_train = False          # silent retrain: skip playback, back to IDLE
+                    if self.pending_validation_finalize:
+                        self.pending_validation_finalize = False
+                        self.state = DONE
+                        self._finalize_validation_condition()
+                        return
                     self.state = IDLE
                 else:
                     self.playback_idx = 0            # G was pressed: show playback as before
@@ -456,6 +883,8 @@ class PA3_Kinesthetic:
         g.haptic.height = 0
 
         wall_hit = self.haptics.last_wall if self.haptics.last_penetration > 0 else None
+        progress = self.tube.progress(pos_phys)
+        elapsed = time.time() - self.start_time if self.state == RECORDING else 0.0
         
         # ── Left: Haptic panel ──────────────────────────────────────────
         # Draw tube without centerline — we handle it conditionally below
@@ -500,19 +929,22 @@ class PA3_Kinesthetic:
                               int(xh[1] - fe[1] * fscale)), 2)
 
         # ── Right: VR panel ─────────────────────────────────────────────
-
-        # 1. Fill only — behind uncertainty
-        self._draw_tube(g.screenVR, draw_walls=False, draw_centerline=False)
+        g.draw_mars_vr_scene(
+            self.tube,
+            STATE_NAMES[self.state],
+            len(self.all_demos),
+            self.tube_name,
+            progress,
+            elapsed,
+            highlight_wall=wall_hit,
+            cursor_phys=pos_phys,
+        )
 
         # 2. GP uncertainty — above fill, below walls
         if self.gp_traj_phys is not None:
             gp_idx = self.playback_idx if self.state == PLAYBACK else len(self.gp_traj_phys)
             self._draw_gp_uncertainty(g.screenVR,
                                       self.gp_traj_phys[:gp_idx], self.gp_traj_std[:gp_idx])
-
-        # 3. Walls + markers — on top of uncertainty, no fill, no centerline
-        self._draw_tube(g.screenVR, highlight_wall=wall_hit,
-                        draw_fill=False, draw_centerline=False)
 
         # 4. Demos
         for i, demo in enumerate(self.all_demos):
@@ -581,21 +1013,23 @@ class PA3_Kinesthetic:
         state_str = STATE_NAMES[self.state]
         debug_parts = [
             f"[{state_str}]",
+            f"mode={self.mode}",
+            f"p={self.participant_number}",
             f"demos={n}",
             f"tube={self.tube_name}",
-            f"groove={'ON' if self.haptics.groove_enabled else 'OFF'}",
-            f"walls={'ON' if self.haptics.walls_enabled else 'OFF'}",
-            f"gpgroove={'ON' if self.haptics.gp_groove_enabled else 'OFF'}",
-            f"fadgr={'ON' if self.haptics.fading_groove_enabled else 'OFF'}",
+            f"cond={self.condition_id}",
+            f"input={frame_input_mode}",
+            f"fb={self.condition_spec['feedback_mode']}",
         ]
         if self.state == RECORDING:
-            elapsed = time.time() - self.start_time
-            prog = self.tube.progress(pos_phys)
+            prog = progress
             debug_parts += [f"t={elapsed:.1f}s",
                             f"prog={prog*100:.0f}%",
                             f"wall_hits={self.wall_hits}"]
         if self.trial_metrics and self.state in (PLAYBACK, DONE):
             debug_parts.append(f"GP_MND={self.trial_metrics['gp_mnd']*1000:.1f}mm")
+        if self.validation_mode:
+            debug_parts.append(f"target={self.required_demos}")
 
         debug_str = "   ".join(debug_parts)
         debug_font = pygame.font.SysFont("Courier", 13)
@@ -636,23 +1070,50 @@ class PA3_Kinesthetic:
         font = pygame.font.SysFont("Arial", 16)
         y_base = g.window_size[1] - 160
         if self.state == IDLE:
-            lines = [f"Demos: {n}  |  Tube: {self.tube_name}"]
+            lines = [
+                f"Participant: {self.participant_number}/{self.participant_count}",
+                f"Demos: {n}  |  Crack: {self.tube_name}",
+                f"Condition {self.condition_id}: {self._current_condition_label()}",
+                f"Mode: {self._mode_label()}",
+            ]
             if n >= 1: lines.append("G = train GP")
+            if self.validation_mode:
+                lines.append(
+                    f"Collect exactly {self.required_demos} demos before condition completion"
+                )
         elif self.state == REVIEW:
-            lines = [f"Demo #{n} saved!  ({self.last_demo_time:.1f}s)",
-                     f"MND from center: {self.per_demo_metrics[-1]*1000:.1f}mm",
-                     "ENTER = keep & next demo",
-                     "D = delete this demo",
-                     f"G = train GP on {n} demo{'s' if n > 1 else ''}"]
+            lines = [
+                f"Participant: {self.participant_number}/{self.participant_count}",
+                f"Demo #{n} saved!  ({self.last_demo_time:.1f}s)",
+                f"Condition {self.condition_id}: {self._current_condition_label()}",
+                f"MND from center: {self.per_demo_metrics[-1]*1000:.1f}mm",
+                f"Wall hits: {self.per_demo_wall_hits[-1]}",
+                "ENTER = keep & next demo",
+                "D = delete this demo",
+                (
+                    f"ENTER = finalize condition at {n}/{self.required_demos} demos"
+                    if self.validation_mode and n >= self.required_demos
+                    else f"G = train GP on {n} demo{'s' if n > 1 else ''}"
+                ),
+            ]
         elif self.state == DONE:
             m = self.trial_metrics
-            lines = [f"GP trained on {m['n_demos']} demos",
-                     f"GP MND: {m['gp_mnd']*1000:.2f}mm  |  "
-                     f"Hausdorff: {m['gp_hausdorff']*1000:.2f}mm",
-                     "A = auto-play  |  P = replay  |  ENTER = add demos",
-                     "N = NASA-TLX  |  C = clear  |  Q = quit"]
+            lines = [
+                f"Participant: {self.participant_number}/{self.participant_count}",
+                f"Condition {self.condition_id}: {self._current_condition_label()}",
+                f"Mode: {self._mode_label()}",
+                f"GP trained on {m['n_demos']} demos",
+                f"GP MND: {m['gp_mnd']*1000:.2f}mm  |  "
+                f"Hausdorff: {m['gp_hausdorff']*1000:.2f}mm",
+                f"Time: {m['total_demo_time_s']:.1f}s  |  Wall hits: {m['wall_hit_events_total']}  |  Success: {int(m['success'])}",
+                "A = auto-play  |  P = replay  |  ENTER = add demos",
+                "N = NASA-TLX  |  C = clear  |  Q = quit",
+            ]
         else:
             lines = []
+
+        if self.auto_analysis_status:
+            lines.append(self.auto_analysis_status)
 
         for i, line in enumerate(lines):
             surf = font.render(line, True, (255, 255, 255))
@@ -660,10 +1121,11 @@ class PA3_Kinesthetic:
 
 
         # ── Physics sim ─────────────────────────────────────────────────
-        if self.device_connected:
+        if frame_input_mode == "device":
             p.update_force(fe)
         else:
-            xh = g.sim_forces(xh, fe, xm, mouse_k=0.5, mouse_b=0.8)
+            if frame_feedback_active:
+                xh = g.sim_forces(xh, fe, xm, mouse_k=0.5, mouse_b=0.8)
             pos_phys_s = g.inv_convert_pos(xh)
             pA0, pB0, pA, pB, pE = p.derive_device_pos(pos_phys_s)
             pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
@@ -712,37 +1174,79 @@ class PA3_Kinesthetic:
         if not self.all_results and not self.all_demos:
             return
 
-        os.makedirs("results", exist_ok=True)
+        if self.validation_mode:
+            folder = self._current_condition_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            current_metrics = [self.all_results[-1]] if self.all_results else []
+            if current_metrics:
+                with open(folder / "metrics.json", "w") as f:
+                    json.dump(current_metrics, f, indent=2, default=str)
+            for i, demo in enumerate(self.all_demos):
+                np.save(folder / f"demo_{i+1}.npy", demo)
+            if self.gp_traj_phys is not None:
+                np.save(folder / "gp_trajectory.npy", self.gp_traj_phys)
+            if self.gp_traj_std is not None:
+                np.save(folder / "gp_std.npy", self.gp_traj_std)
+            summary = {
+                "run_id": self.run_id,
+                "participant_number": self.participant_number,
+                "participant_count": self.participant_count,
+                "mode": self.mode,
+                "required_demos_target": self.required_demos,
+                "tube": self.tube_name,
+                "condition_id": self.condition_id,
+                "condition": self.condition_spec["slug"],
+                "condition_label": self.condition_spec["label"],
+                "input_mode": self._effective_input_mode(),
+                "feedback_mode": self.condition_spec["feedback_mode"],
+                "hardware_connected": self.device_connected,
+                "n_demos": len(self.all_demos),
+                "demo_files": [f"demo_{i+1}.npy" for i in range(len(self.all_demos))],
+            }
+            with open(folder / "summary.json", "w") as f:
+                json.dump(summary, f, indent=2)
+            self._save_participant_summary()
+            self._save_validation_run_summary()
+            print(f"Condition saved to {folder}/")
+            return
 
-        # One folder per session
-        session_id = int(time.time())
-        folder = f"results/session_{session_id}"
-        os.makedirs(folder, exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.session_folder.mkdir(parents=True, exist_ok=True)
+        folder = self.session_folder
 
-        # ── Metrics JSON (same as before) ──
         if self.all_results:
-            with open(f"{folder}/metrics.json", "w") as f:
+            with open(folder / "metrics.json", "w") as f:
                 json.dump(self.all_results, f, indent=2, default=str)
 
-        # ── Individual demo trajectories ──
         for i, demo in enumerate(self.all_demos):
-            np.save(f"{folder}/demo_{i+1}.npy", demo)
+            np.save(folder / f"demo_{i+1}.npy", demo)
 
-        # ── GP trajectory and std (final trained version) ──
         if self.gp_traj_phys is not None:
-            np.save(f"{folder}/gp_trajectory.npy", self.gp_traj_phys)
+            np.save(folder / "gp_trajectory.npy", self.gp_traj_phys)
         if self.gp_traj_std is not None:
-            np.save(f"{folder}/gp_std.npy", self.gp_traj_std)
+            np.save(folder / "gp_std.npy", self.gp_traj_std)
 
-        # ── Session summary: tube, condition, n_demos ──
         summary = {
-            "session_id":  session_id,
+            "session_id": self.session_id,
+            "participant_number": self.participant_number,
+            "participant_count": self.participant_count,
+            "mode": self.mode,
+            "required_demos_target": self.required_demos if self.validation_mode else None,
             "tube":        self.tube_name,
-            "condition":   "kinesthetic",
+            "condition_id": self.condition_id,
+            "condition":   self.condition_spec["slug"],
+            "condition_label": self.condition_spec["label"],
+            "input_mode": self._effective_input_mode(),
+            "feedback_mode": self.condition_spec["feedback_mode"],
+            "hardware_connected": self.device_connected,
+            "n_trials": len(self.all_results),
             "n_demos":     len(self.all_demos),
             "demo_files":  [f"demo_{i+1}.npy" for i in range(len(self.all_demos))],
+            "conditions_in_session": sorted({
+                result["condition"] for result in self.all_results
+            }) if self.all_results else [],
         }
-        with open(f"{folder}/summary.json", "w") as f:
+        with open(folder / "summary.json", "w") as f:
             json.dump(summary, f, indent=2)
 
         print(f"Session saved to {folder}/")
@@ -750,12 +1254,16 @@ class PA3_Kinesthetic:
 
     def close(self):
         self._save_results()
+        if self.validation_mode:
+            self._save_participant_summary()
+            self._save_validation_run_summary()
         self.graphics.close()
         self.physics.close()
 
 
 if __name__ == "__main__":
-    pa = PA3_Kinesthetic()
+    config = parse_runtime_config()
+    pa = PA3_Kinesthetic(config)
     try:
         while True:
             pa.run()

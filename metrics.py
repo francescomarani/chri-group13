@@ -90,6 +90,16 @@ def path_length(traj):
     return float(np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1)))
 
 
+def endpoint_errors(traj, ref):
+    """Start/end point errors between a trajectory and a reference curve."""
+    traj = np.asarray(traj)
+    ref = np.asarray(ref)
+    return (
+        float(np.linalg.norm(traj[0] - ref[0])),
+        float(np.linalg.norm(traj[-1] - ref[-1])),
+    )
+
+
 def compute_all_metrics(demo, gp_repro, target):
     """
     Compute all metrics for one trial.
@@ -122,4 +132,9 @@ def compute_all_metrics(demo, gp_repro, target):
         "demo_length":    path_length(demo),
         "gp_length":      path_length(gp_repro),
         "target_length":  path_length(target),
+        # Endpoint quality
+        "demo_start_error": endpoint_errors(demo, target)[0],
+        "demo_end_error":   endpoint_errors(demo, target)[1],
+        "gp_start_error":   endpoint_errors(gp_repro, target)[0],
+        "gp_end_error":     endpoint_errors(gp_repro, target)[1],
     }

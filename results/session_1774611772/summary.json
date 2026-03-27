@@ -1,0 +1,21 @@
+{
+  "session_id": 1774611772,
+  "tube": "s_curve",
+  "condition_id": 5,
+  "condition": "haply_increasing_learned_guidance",
+  "condition_label": "Haply device, increasing learned guidance",
+  "input_mode": "device",
+  "feedback_mode": "increasing_learned_guidance",
+  "hardware_connected": true,
+  "n_demos": 8,
+  "demo_files": [
+    "demo_1.npy",
+    "demo_2.npy",
+    "demo_3.npy",
+    "demo_4.npy",
+    "demo_5.npy",
+    "demo_6.npy",
+    "demo_7.npy",
+    "demo_8.npy"
+  ]
+}
