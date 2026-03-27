@@ -78,6 +78,8 @@ CONDITION_SPECS = {
         "centerline_fading": False,
         "learned_guidance": False,
         "auto_retrain": False,
+        "guidance_fade_start": 0.55,
+        "guidance_fade_end": 0.90,
     },
     4: {
         "slug": "haply_fixed_centerline_guidance",
@@ -89,6 +91,8 @@ CONDITION_SPECS = {
         "centerline_fading": False,
         "learned_guidance": False,
         "auto_retrain": False,
+        "guidance_fade_start": 0.90,
+        "guidance_fade_end": 1.10,
     },
     5: {
         "slug": "haply_fading_centerline_guidance",
@@ -100,6 +104,8 @@ CONDITION_SPECS = {
         "centerline_fading": True,
         "learned_guidance": False,
         "auto_retrain": False,
+        "guidance_fade_start": 0.90,
+        "guidance_fade_end": 1.10,
     },
     6: {
         "slug": "haply_increasing_learned_guidance",
@@ -349,6 +355,8 @@ class PA3_Kinesthetic:
         self.haptics.walls_enabled = bool(spec["walls"])
         self.haptics.fading_groove_enabled = bool(spec["centerline_fading"])
         self.haptics.gp_groove_enabled = bool(spec["learned_guidance"])
+        self.haptics.guidance_fade_start = spec.get("guidance_fade_start", 0.55)
+        self.haptics.guidance_fade_end   = spec.get("guidance_fade_end",   0.90)
 
     def _can_change_condition(self):
         if self.validation_mode:
