@@ -91,8 +91,8 @@ CONDITION_SPECS = {
         "centerline_fading": False,
         "learned_guidance": False,
         "auto_retrain": False,
-        "guidance_fade_start": 0.55,
-        "guidance_fade_end": 0.90,
+        "guidance_fade_start": 0.75,
+        "guidance_fade_end": 0.95,
     },
     5: {
         "slug": "haply_fading_centerline_guidance",
@@ -104,8 +104,8 @@ CONDITION_SPECS = {
         "centerline_fading": True,
         "learned_guidance": False,
         "auto_retrain": False,
-        "guidance_fade_start": 0.55,
-        "guidance_fade_end": 0.90,
+        "guidance_fade_start": 0.75,
+        "guidance_fade_end": 0.95,
     },
     6: {
         "slug": "haply_increasing_learned_guidance",
@@ -117,8 +117,8 @@ CONDITION_SPECS = {
         "centerline_fading": False,
         "learned_guidance": True,
         "auto_retrain": False,
-        "guidance_fade_start": 0.55,
-        "guidance_fade_end": 0.90,
+        "guidance_fade_start": 0.75,
+        "guidance_fade_end": 0.95,
     },
 }
 
@@ -352,7 +352,7 @@ class PA3_Kinesthetic:
 
         self.haptics.reset_proxy()
         self.haptics.wall_k = 140.0
-        self.haptics.wall_damping = 6.0
+        self.haptics.wall_damping = 12.0
         self.haptics.groove_enabled = bool(spec["centerline"])
         self.haptics.walls_enabled = bool(spec["walls"])
         self.haptics.fading_groove_enabled = bool(spec["centerline_fading"])
