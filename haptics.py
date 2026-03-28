@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-PA3 — Haptic Force Computation (Proxy-based, one-sided spring)
----------------------------------------------------------------
+PA3 — Haptic Force Computation (Gaussian repulsive walls)
+----------------------------------------------------------
 Key design:
-  - PA1c-style god-object: wall contact stays latched after first hit
-  - Tangential wall motion uses a persistent stick/slip anchor along the curve
-  - ONE-SIDED spring: force only when abs_d > half_width (no pull-back = no bounce)
-  - Release happens when clearly inside the tube again
+  - Gaussian potential field for walls: smooth, continuous, no state machine
+  - Force is a pure function of position → no latch/release/hysteresis needed
+  - Bidirectional damping near walls prevents oscillation
 """
 
 import numpy as np
@@ -18,54 +17,40 @@ class TubeHaptics:
                  groove_k=350.0,
                  groove_f_max=1.4,   # N — max groove force
                  groove_damping=0.8,   # N·s/m — damps lateral oscillation
-                 wall_k=5000.0,
-                 wall_damping=4.0,
-                 wall_mu_static=0.55,
-                 wall_mu_kinetic=0.35,
+                 wall_amplitude=3.0,   # N — peak repulsive force at wall boundary
+                 wall_sigma=0.0012,    # m — Gaussian width (controls wall softness)
+                 wall_damping=5.0,     # N·s/m — bidirectional damping near walls
                  groove_deadzone=0.0,
-                 release_hysteresis=0.0008,
                  local_search_window=80,
-                 exit_damping=10.0,      # N·s/m — absorbs rebound velocity
-                 exit_band=0.001,        # m — viscous layer inside wall
                  guidance_fade_start=0.55,
                  guidance_fade_end=0.90,
                  total_f_max=2.5
-
                  ):
         self.tube = tube
         self.groove_k = groove_k
         self.groove_f_max = groove_f_max
         self.groove_damping = groove_damping
-        self.wall_k = wall_k
+        self.wall_amplitude = wall_amplitude
+        self.wall_sigma = wall_sigma
         self.wall_damping = wall_damping
-        self.wall_mu_static = wall_mu_static
-        self.wall_mu_kinetic = wall_mu_kinetic
         self.groove_deadzone = groove_deadzone
-        self.release_hysteresis = release_hysteresis
         self.local_search_window = local_search_window
-        self.exit_damping = exit_damping
-        self.exit_band = exit_band
         self.guidance_fade_start = guidance_fade_start
         self.guidance_fade_end = guidance_fade_end
         self.total_f_max = total_f_max
 
-        
         # ── Independent feature toggles (set from PA3 via H / W keys) ──
         self.groove_enabled = True
         self.walls_enabled = True
 
-        # ── Proxy state ──
+        # ── State ──
         self.proxy_pos = None
         self.proxy_idx = 0
-        self.contact_wall = None
+        self.contact_wall = None      # kept for compatibility (drawing)
         self.prev_pos = None
-        self.wall_friction_state = 'free'
-        self.wall_stick_idx = None
 
-        diffs = np.diff(self.tube.centerline, axis=0)
-        seg_lengths = np.linalg.norm(diffs, axis=1)
-        self._cum_arc = np.zeros(self.tube.n_pts)
-        self._cum_arc[1:] = np.cumsum(seg_lengths)
+        # Cutoff distance: beyond 3σ from wall, Gaussian force is negligible
+        self._wall_cutoff = 3.0 * self.wall_sigma
 
 
         # ── Learned-trajectory guidance ──
@@ -103,8 +88,6 @@ class TubeHaptics:
         self.last_penetration = 0.0
         self.last_wall = None
         self.last_proxy_pos = None
-        self.wall_friction_state = 'free'
-        self.wall_stick_idx = None
 
     def _local_closest(self, pos):
         tube = self.tube
@@ -122,26 +105,14 @@ class TubeHaptics:
         abs_d = abs(signed_d)
         return idx, proj, normal, signed_d, abs_d
 
-    def _tangent_at_idx(self, idx):
-        normal = self.tube.normals[int(idx)]
-        tangent = np.array([normal[1], -normal[0]], dtype=float)
-        t_norm = np.linalg.norm(tangent)
-        if t_norm > 1e-10:
-            tangent /= t_norm
-        return tangent
-
-    def _arc_to_idx(self, arc_s):
-        arc_s = float(np.clip(arc_s, self._cum_arc[0], self._cum_arc[-1]))
-        idx = int(np.searchsorted(self._cum_arc, arc_s, side='left'))
-        return min(max(idx, 0), self.tube.n_pts - 1)
-
-    def _wall_point_at_idx(self, idx, wall_name):
+    def _wall_point(self, idx, wall_name):
+        """Surface point on the wall (for proxy visualization)."""
         idx = int(np.clip(idx, 0, self.tube.n_pts - 1))
         proj = self.tube.centerline[idx]
         normal = self.tube.normals[idx]
         if wall_name == 'left':
-            return proj + normal * self.tube.half_width, normal
-        return proj - normal * self.tube.half_width, normal
+            return proj + normal * self.tube.half_width
+        return proj - normal * self.tube.half_width
 
     def _guidance_gain(self, abs_d, in_wall_contact):
         """
@@ -211,107 +182,55 @@ class TubeHaptics:
         idx_g, proj_g, normal_g, signed_d_g, abs_d_g = tube.closest_centerline_point(pos)
         self.last_signed_d = signed_d_g
 
-        # ── VIRTUAL WALLS ────────────────────────────────────────────────
+        # ── VIRTUAL WALLS (Gaussian repulsive field) ────────────────────
         if self.walls_enabled:
-            if self.contact_wall is None:
-                if abs_d_g <= tube.half_width:
-                    # Free: proxy tracks ee
-                    self.proxy_pos = pos.copy()
-                    self.proxy_idx = idx_g
-                    self.last_penetration = 0.0
-                    self.last_wall = None
-                    self.last_wall_force = 0.0
-                    self.last_proxy_pos = None
-                else:
-                    # First contact: latch wall and initialize tangential anchor,
-                    # mirroring the PA1c "hit edge + stiction point" strategy.
-                    self.contact_wall = 'left' if signed_d_g > 0 else 'right'
-                    self.proxy_idx = idx_g
-                    self.wall_stick_idx = idx_g
-                    self.wall_friction_state = 'stick'
+            # Distance from wall boundary (positive = inside tube, negative = outside)
+            d_wall = tube.half_width - abs_d_g
 
-            if self.contact_wall is not None:
-                idx_l, proj_l, normal_l, signed_d_l, abs_d_l = self._local_closest(pos)
-                penetration = max(0.0, abs_d_l - tube.half_width)
-
-                if self.wall_stick_idx is None:
-                    self.wall_stick_idx = idx_l
-
-                current_arc = self._cum_arc[idx_l]
-                stick_arc = self._cum_arc[self.wall_stick_idx]
-                tang_disp = current_arc - stick_arc
-                f_normal = self.wall_k * penetration
-                f_tang = self.wall_k * abs(tang_disp)
-
-                if f_normal > 1e-8:
-                    if f_tang > self.wall_mu_static * f_normal:
-                        max_arc = (self.wall_mu_kinetic * f_normal) / self.wall_k
-                        stick_arc = current_arc - np.sign(tang_disp) * max_arc
-                        self.wall_stick_idx = self._arc_to_idx(stick_arc)
-                        self.wall_friction_state = 'slip'
-                    else:
-                        self.wall_friction_state = 'stick'
-                else:
-                    self.wall_friction_state = 'free'
-                    self.wall_stick_idx = idx_l
-
-                self.proxy_idx = self.wall_stick_idx
-                self.proxy_pos, proxy_normal = self._wall_point_at_idx(
-                    self.proxy_idx, self.contact_wall
+            if d_wall < self._wall_cutoff:
+                # Gaussian repulsive force: smooth, continuous, no state machine
+                f_mag = self.wall_amplitude * np.exp(
+                    -d_wall ** 2 / (2.0 * self.wall_sigma ** 2)
                 )
+                # Direction: push toward centerline
+                wall_dir = -normal_g if signed_d_g > 0 else normal_g
+                fe += f_mag * wall_dir
 
+                # Bidirectional damping (prevents oscillation in both directions)
+                if self.prev_pos is not None and dt > 0:
+                    vel = (pos - self.prev_pos) / dt
+                    vel_normal = np.dot(vel, -wall_dir)  # positive = moving toward wall
+                    fe += self.wall_damping * vel_normal * wall_dir
+
+                self.last_wall_force = f_mag
+
+                # Proxy visualization: project onto wall surface
+                wall_name = 'left' if signed_d_g > 0 else 'right'
+                self.proxy_pos = self._wall_point(idx_g, wall_name)
+                self.proxy_idx = idx_g
                 self.last_proxy_pos = self.proxy_pos.copy()
-                self.last_penetration = penetration
-                self.last_wall = self.contact_wall
-
-                # One-sided spring: only push when outside
-                if penetration > 0:
-                    displacement = self.proxy_pos - pos
-                    f_wall = self.wall_k * displacement
-                    if self.prev_pos is not None and dt > 0:
-                        vel = (pos - self.prev_pos) / dt
-                        wall_normal = proxy_normal if self.contact_wall == 'left' else -proxy_normal
-                        vel_deeper = np.dot(vel, wall_normal)
-                        if vel_deeper > 0:
-                            f_wall -= self.wall_damping * vel_deeper * wall_normal
-                    fe += f_wall
-                    self.last_wall_force = float(np.linalg.norm(f_wall))
-                else:
-                    self.last_wall_force = 0.0
-
-                # Release when clearly inside
-                if abs_d_g < tube.half_width - self.release_hysteresis:
-                    self.proxy_pos = pos.copy()
-                    self.proxy_idx = idx_g
-                    self.contact_wall = None
-                    self.wall_friction_state = 'free'
-                    self.wall_stick_idx = None
-                    self.last_penetration = 0.0
-                    self.last_wall = None
-                    self.last_wall_force = 0.0
-                    self.last_proxy_pos = None
-                    fe = np.zeros(2)
-
+                self.last_wall = wall_name
+                self.contact_wall = wall_name
+                self.last_penetration = max(0.0, -d_wall)  # >0 when outside tube
+            else:
+                # Far from walls: no wall force
+                self.proxy_pos = pos.copy()
+                self.proxy_idx = idx_g
+                self.contact_wall = None
+                self.last_penetration = 0.0
+                self.last_wall = None
+                self.last_wall_force = 0.0
+                self.last_proxy_pos = None
         else:
-            # Walls disabled: release any contact, proxy follows ee
             self.contact_wall = None
             self.proxy_pos = pos.copy()
             self.proxy_idx = idx_g
-            self.wall_friction_state = 'free'
-            self.wall_stick_idx = None
             self.last_penetration = 0.0
             self.last_wall = None
             self.last_wall_force = 0.0
             self.last_proxy_pos = None
 
-        # ── EXIT DAMPING: viscous band just inside wall ──────────────────
-        depth_inside = tube.half_width - abs_d_g
-        if 0 <= depth_inside < self.exit_band and self.prev_pos is not None and dt > 0:
-            vel = (pos - self.prev_pos) / dt
-            vel_normal = np.dot(vel, normal_g)
-            fe -= self.exit_damping * vel_normal * normal_g
-
-        wall_contact_active = self.contact_wall is not None or self.last_penetration > 0.0
+        wall_contact_active = self.contact_wall is not None
         guidance_gain = self._guidance_gain(abs_d_g, wall_contact_active)
 
         # ── GROOVE ───────────────────────────────────────────────────────
