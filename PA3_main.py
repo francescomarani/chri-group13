@@ -572,31 +572,29 @@ class PA3_Kinesthetic:
                    draw_fill=True, draw_walls=True, draw_centerline=True):
         g = self.graphics
         tube = self.tube
-        left_pts   = [g.convert_pos(p) for p in tube.wall_left]
-        right_pts  = [g.convert_pos(p) for p in tube.wall_right]
         center_pts = [g.convert_pos(p) for p in tube.centerline]
         left_color  = (255, 50, 50) if highlight_wall == 'left'  else (100, 100, 100)
         right_color = (255, 50, 50) if highlight_wall == 'right' else (100, 100, 100)
 
-        if draw_fill:
-            # Fill the corridor as a single polygon; this avoids the triangular
-            # artifacts created by thick overlapping line segments on tight bends.
-            fill_poly = left_pts + list(reversed(right_pts))
-            if len(fill_poly) >= 3:
-                pygame.draw.polygon(
-                    surface,
-                    (236, 242, 236),
-                    [(int(p[0]), int(p[1])) for p in fill_poly],
-                )
+        center_px = [(int(p[0]), int(p[1])) for p in center_pts]
+        tube_px = max(2, int(round(2.0 * tube.half_width * g.window_scale)))
+        wall_px = 3
+        fill_r = max(1, tube_px // 2)
+        outer_r = fill_r + wall_px
 
-        if draw_walls:
-            if len(left_pts) > 1:
-                pygame.draw.lines(surface, left_color, False, left_pts, 3)
-            if len(right_pts) > 1:
-                pygame.draw.lines(surface, right_color, False, right_pts, 3)
+        if len(center_px) > 1:
+            if draw_walls:
+                border_color = left_color if highlight_wall == 'left' else right_color if highlight_wall == 'right' else (100, 100, 100)
+                for pt in center_px:
+                    pygame.draw.circle(surface, border_color, pt, outer_r)
 
-        if draw_centerline and len(center_pts) > 1:
-            pygame.draw.lines(surface, (120, 120, 120), False, center_pts, 1)
+            if draw_fill:
+                fill_color = (236, 242, 236)
+                for pt in center_px:
+                    pygame.draw.circle(surface, fill_color, pt, fill_r)
+
+            if draw_centerline:
+                pygame.draw.lines(surface, (120, 120, 120), False, center_px, 1)
 
         if draw_walls:
             start_s = g.convert_pos(tube.start)
