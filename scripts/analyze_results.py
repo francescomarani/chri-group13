@@ -16,8 +16,11 @@ if "MPLCONFIGDIR" not in os.environ:
     mpl_dir.mkdir(parents=True, exist_ok=True)
     os.environ["MPLCONFIGDIR"] = str(mpl_dir)
 
+DISPLAY_AVAILABLE = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
 import matplotlib
-matplotlib.use("Agg")
+if not DISPLAY_AVAILABLE:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import friedmanchisquare
@@ -35,7 +38,49 @@ DEFAULT_METRICS = [
 ]
 
 
+def _coerce_csv_value(value: str):
+    if value is None:
+        return None
+    text = value.strip()
+    if text == "":
+        return None
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        if any(ch in text for ch in (".", "e", "E")):
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text
+
+
 def load_rows(results_dir: Path) -> list[dict]:
+    csv_rows: list[dict] = []
+    for csv_path in sorted(results_dir.rglob("metrics.csv")):
+        if csv_path.parent.name == "analysis":
+            continue
+        if csv_path.parent == results_dir / "analysis":
+            continue
+        with csv_path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            for idx, record in enumerate(reader, start=1):
+                row = {key: _coerce_csv_value(value) for key, value in record.items()}
+                row["session_folder"] = csv_path.parent.name
+                row["trial_in_file"] = idx
+                if csv_path.parent.name.startswith("participant_"):
+                    row["participant_folder"] = csv_path.parent.name
+                if "validation_run_" in str(csv_path):
+                    row["validation_run"] = next(
+                        (part for part in csv_path.parts if part.startswith("validation_run_")),
+                        None,
+                    )
+                csv_rows.append(row)
+    if csv_rows:
+        return csv_rows
+
     rows: list[dict] = []
     for summary_path in sorted(results_dir.rglob("summary.json")):
         session_dir = summary_path.parent
@@ -111,7 +156,7 @@ def summarise_by_condition(rows: list[dict], metrics: list[str]) -> list[dict]:
     return summaries
 
 
-def plot_metric(rows: list[dict], metric: str, out_path: Path) -> None:
+def plot_metric(rows: list[dict], metric: str, out_path: Path, show_plot: bool = False) -> None:
     grouped: dict[str, list[float]] = {}
     for row in rows:
         value = row.get(metric)
@@ -126,17 +171,20 @@ def plot_metric(rows: list[dict], metric: str, out_path: Path) -> None:
     labels = list(grouped.keys())
     values = [grouped[label] for label in labels]
 
-    plt.figure(figsize=(10, 5))
-    plt.boxplot(values, labels=labels, patch_artist=True)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.boxplot(values, tick_labels=labels, patch_artist=True)
     for i, ys in enumerate(values, start=1):
         xs = np.random.normal(i, 0.04, size=len(ys))
-        plt.scatter(xs, ys, s=20, alpha=0.7)
-    plt.xticks(rotation=20, ha="right")
-    plt.ylabel(metric)
-    plt.title(metric)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=180)
-    plt.close()
+        ax.scatter(xs, ys, s=20, alpha=0.7)
+    ax.tick_params(axis="x", rotation=20)
+    for tick in ax.get_xticklabels():
+        tick.set_ha("right")
+    ax.set_ylabel(metric)
+    ax.set_title(metric)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    if not show_plot:
+        plt.close(fig)
 
 
 def friedman_report(rows: list[dict], metrics: list[str]) -> list[dict]:
@@ -167,7 +215,10 @@ def friedman_report(rows: list[dict], metrics: list[str]) -> list[dict]:
             continue
 
         arrays = list(zip(*[vals for _, vals in complete]))
-        stat, p_value = friedmanchisquare(*arrays)
+        with np.errstate(all="ignore"):
+            stat, p_value = friedmanchisquare(*arrays)
+        if not (math.isfinite(stat) and math.isfinite(p_value)):
+            continue
         results.append({
             "metric": metric,
             "participants": len(complete),
@@ -178,12 +229,20 @@ def friedman_report(rows: list[dict], metrics: list[str]) -> list[dict]:
     return results
 
 
-def run_analysis(results_dir: str | Path = "results", out_dir: str | Path = "analysis") -> Path:
+def run_analysis(
+    results_dir: str | Path = "results",
+    out_dir: str | Path = "analysis",
+    show_plots: bool | None = None,
+) -> Path:
     results_dir = Path(results_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
+    if show_plots is None:
+        show_plots = DISPLAY_AVAILABLE
+    elif show_plots and not DISPLAY_AVAILABLE:
+        show_plots = False
 
     rows = load_rows(results_dir)
     if not rows:
@@ -198,7 +257,10 @@ def run_analysis(results_dir: str | Path = "results", out_dir: str | Path = "ana
         json.dump(friedman, f, indent=2)
 
     for metric in metrics:
-        plot_metric(rows, metric, plots_dir / f"{metric}.png")
+        plot_metric(rows, metric, plots_dir / f"{metric}.png", show_plot=show_plots)
+
+    if show_plots and metrics:
+        plt.show()
 
     print(f"Analysis written to {out_dir}")
     return out_dir
@@ -212,8 +274,9 @@ def main() -> None:
         help="Folder containing session_* and/or validation_run_* subfolders",
     )
     parser.add_argument("--out-dir", default="analysis", help="Where to write CSV files and plots")
+    parser.add_argument("--no-show", action="store_true", help="Save plots only, without opening plot windows")
     args = parser.parse_args()
-    run_analysis(results_dir=args.results_dir, out_dir=args.out_dir)
+    run_analysis(results_dir=args.results_dir, out_dir=args.out_dir, show_plots=not args.no_show)
 
 
 if __name__ == "__main__":

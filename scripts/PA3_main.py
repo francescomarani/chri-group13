@@ -14,6 +14,7 @@ If the Haply device is unavailable, mouse input is used only as an automatic fal
 """
 
 import argparse
+import csv
 import sys, time, os, json
 from pathlib import Path
 import tempfile
@@ -50,6 +51,27 @@ DEMO_COLORS = [
     (160, 0, 220), (0, 180, 180), (180, 100, 60),
     (100, 200, 60), (200, 60, 160),
 ]
+
+CONDITION_CODE_TO_ID = {
+    "NH": 1,
+    "VW": 2,
+    "CG": 3,
+    "FG": 4,
+    "SG": 5,
+}
+
+GROUP_CONDITION_CODES = {
+    "A": ["NH", "VW", "CG", "FG", "SG"],
+    "B": ["VW", "CG", "FG", "SG", "NH"],
+    "C": ["CG", "FG", "SG", "NH", "VW"],
+    "D": ["FG", "SG", "NH", "VW", "CG"],
+    "E": ["SG", "NH", "VW", "CG", "FG"],
+}
+
+GROUP_CONDITION_ORDERS = {
+    group: [CONDITION_CODE_TO_ID[code] for code in codes]
+    for group, codes in GROUP_CONDITION_CODES.items()
+}
 
 CONDITION_SPECS = {
     1: {
@@ -98,7 +120,7 @@ CONDITION_SPECS = {
         "centerline": False,
         "centerline_fading": True,
         "learned_guidance": False,
-        "auto_retrain": False,
+        "auto_retrain": True,
         "guidance_fade_start": 0.75,
         "guidance_fade_end": 0.95,
     },
@@ -111,7 +133,7 @@ CONDITION_SPECS = {
         "centerline": False,
         "centerline_fading": False,
         "learned_guidance": True,
-        "auto_retrain": False,
+        "auto_retrain": True,
         "guidance_fade_start": 0.75,
         "guidance_fade_end": 0.95,
     },
@@ -148,10 +170,25 @@ def _prompt_mode(default="free"):
         print("Please enter 'f' for free or 'v' for validation.")
 
 
+def _prompt_validation_group(default="A"):
+    default = str(default).upper()
+    if default not in GROUP_CONDITION_ORDERS:
+        default = "A"
+    while True:
+        raw = input(f"Counterbalance group [A-E] [{default}]: ").strip().upper()
+        if not raw:
+            return default
+        if raw in GROUP_CONDITION_ORDERS:
+            return raw
+        print("Please enter one of: A, B, C, D, E.")
+
+
 def parse_runtime_config():
     parser = argparse.ArgumentParser(description="PA3 Hull-Breach Teaching")
     parser.add_argument("--mode", choices=["free", "validation"], default=None)
-    parser.add_argument("--participant-count", type=int, default=None)
+    parser.add_argument("--participant-number", type=int, default=None)
+    parser.add_argument("--participant-count", type=int, dest="participant_count_legacy", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--group", choices=sorted(GROUP_CONDITION_ORDERS.keys()), default=None)
     parser.add_argument("--required-demos", type=int, default=None)
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--analysis-dir", default="analysis")
@@ -160,20 +197,24 @@ def parse_runtime_config():
     if args.mode is None:
         args.mode = _prompt_mode(default="free")
 
-    if args.participant_count is not None and args.participant_count <= 0:
-        parser.error("--participant-count must be > 0")
+    if args.participant_number is None and args.participant_count_legacy is not None:
+        args.participant_number = args.participant_count_legacy
+
+    if args.participant_number is not None and args.participant_number <= 0:
+        parser.error("--participant-number must be > 0")
     if args.required_demos is not None and args.required_demos <= 0:
         parser.error("--required-demos must be > 0")
 
     if args.mode == "validation":
-        if args.participant_count is None:
-            args.participant_count = _prompt_positive_int("Total number of participants", default=1)
+        if args.participant_number is None:
+            args.participant_number = _prompt_positive_int("Participant number", default=1)
+        if args.group is None:
+            args.group = _prompt_validation_group(default="A")
         if args.required_demos is None:
-            args.required_demos = _prompt_positive_int(
-                "Number of demonstrations required before training", default=3
-            )
+            args.required_demos = 3
     else:
-        args.participant_count = 1
+        args.participant_number = 1
+        args.group = "A"
         args.required_demos = args.required_demos or 0
 
     return args
@@ -185,9 +226,10 @@ class PA3_Kinesthetic:
         self.mode = config.mode
         self.validation_mode = (self.mode == "validation")
         self.required_demos = int(config.required_demos or 0)
-        self.participant_count = int(config.participant_count or 1)
+        self.participant_count = 1
         self.current_participant_offset = 0
-        self.participant_number = 1
+        self.participant_number = int(config.participant_number or 1)
+        self.validation_group = str(getattr(config, "group", "A") or "A").upper()
         self.results_dir = Path(config.results_dir)
         self.analysis_dir = Path(config.analysis_dir)
         self.run_id = int(time.time())
@@ -197,9 +239,8 @@ class PA3_Kinesthetic:
         self.auto_analysis_status = None
         self.pending_validation_finalize = False
         self.validation_complete = False
-        self.condition_order = sorted(CONDITION_SPECS.keys())
+        self.condition_order = self._condition_order_for_current_mode()
         self.condition_cursor = 0
-        self.run_results = []
 
         self.physics = Physics(hardware_version=3)
         self.device_connected = self.physics.is_device_connected()
@@ -249,6 +290,11 @@ class PA3_Kinesthetic:
     def _participant_label(self):
         return f"participant_{self.participant_number:02d}"
 
+    def _condition_order_for_current_mode(self):
+        if self.validation_mode:
+            return list(GROUP_CONDITION_ORDERS[self.validation_group])
+        return sorted(CONDITION_SPECS.keys())
+
     def _current_participant_dir(self):
         if self.validation_mode:
             return self.validation_root / self._participant_label()
@@ -291,6 +337,8 @@ class PA3_Kinesthetic:
             "run_id": self.run_id,
             "participant_number": self.participant_number,
             "participant_count": self.participant_count,
+            "validation_group": self.validation_group,
+            "condition_order": self.condition_order,
             "required_demos_target": self.required_demos,
             "n_conditions_completed": len(self.all_results),
             "conditions_completed": [result["condition"] for result in self.all_results],
@@ -299,6 +347,7 @@ class PA3_Kinesthetic:
             json.dump(summary, f, indent=2)
         with open(participant_dir / "metrics.json", "w") as f:
             json.dump(self.all_results, f, indent=2, default=str)
+        self._write_metrics_csv(participant_dir / "metrics.csv", self.all_results)
 
     def _save_validation_run_summary(self):
         if not self.validation_mode:
@@ -306,16 +355,18 @@ class PA3_Kinesthetic:
         self.validation_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "run_id": self.run_id,
-            "participant_count": self.participant_count,
+            "participant_number": self.participant_number,
+            "participant_count": 1,
+            "validation_group": self.validation_group,
             "required_demos_target": self.required_demos,
             "conditions_per_participant": self.condition_order,
-            "n_completed_trials": len(self.run_results),
-            "completed_participants": sorted({row["participant_number"] for row in self.run_results}),
+            "n_completed_trials": len(self.all_results),
         }
         with open(self.validation_root / "run_summary.json", "w") as f:
             json.dump(summary, f, indent=2)
         with open(self.validation_root / "all_metrics.json", "w") as f:
-            json.dump(self.run_results, f, indent=2, default=str)
+            json.dump(self.all_results, f, indent=2, default=str)
+        self._write_metrics_csv(self.validation_root / "all_metrics.csv", self.all_results)
 
     def _advance_validation_sequence(self):
         if not self.validation_mode:
@@ -331,24 +382,13 @@ class PA3_Kinesthetic:
             return
 
         self._save_participant_summary()
-        self.current_participant_offset += 1
-        if self.current_participant_offset < self.participant_count:
-            self.participant_number = self.current_participant_offset + 1
-            self.condition_cursor = 0
-            self.all_results = []
-            self._reset_condition_state()
-            self._apply_condition(self.condition_order[self.condition_cursor])
-            self.auto_analysis_status = (
-                f"Participant {self.participant_number} ready. Start condition {self.condition_id}/{len(self.condition_order)}."
-            )
-            return
-
         self.validation_complete = True
         self.state = DONE
         self.auto_analysis_status = (
-            f"Validation complete for {self.participant_count} participants. Press Q to quit."
+            f"Validation complete for participant {self.participant_number}. Closing session..."
         )
         self._save_validation_run_summary()
+        raise SystemExit(0)
 
     def _apply_condition(self, condition_id):
         spec = CONDITION_SPECS[int(condition_id)]
@@ -360,12 +400,9 @@ class PA3_Kinesthetic:
         self.haptics.reset_proxy()
         self.haptics.wall_k = 70.0
         self.haptics.wall_damping = 8.0
-        self.haptics.groove_enabled = bool(spec["centerline"])
-        self.haptics.walls_enabled = bool(spec["walls"])
-        self.haptics.fading_groove_enabled = bool(spec["centerline_fading"])
-        self.haptics.gp_groove_enabled = bool(spec["learned_guidance"])
         self.haptics.guidance_fade_start = spec.get("guidance_fade_start", 0.55)
         self.haptics.guidance_fade_end   = spec.get("guidance_fade_end",   0.90)
+        self._sync_condition_feedback()
 
     def _can_change_condition(self):
         if self.validation_mode:
@@ -403,16 +440,14 @@ class PA3_Kinesthetic:
         self.validation_mode = (mode == "validation")
         if self.validation_mode:
             self.required_demos = max(1, int(self.required_demos or 3))
-            self.participant_count = max(1, int(self.participant_count or 1))
+            self.participant_count = 1
         else:
             self.required_demos = 0
             self.participant_count = 1
         self.current_participant_offset = 0
-        self.participant_number = 1
         self.validation_complete = False
         self.condition_cursor = 0
-        self.condition_order = sorted(CONDITION_SPECS.keys())
-        self.run_results = []
+        self.condition_order = self._condition_order_for_current_mode()
         self.all_results = []
         self._reset_condition_state()
         self._apply_condition(self.condition_order[self.condition_cursor])
@@ -425,9 +460,54 @@ class PA3_Kinesthetic:
         self._set_mode("free")
         self.auto_analysis_status = "Validation interrupted. Switched to free mode."
 
+    def _sync_condition_feedback(self):
+        spec = self.condition_spec or {}
+        self.haptics.groove_enabled = bool(spec.get("centerline"))
+        self.haptics.fading_groove_enabled = bool(spec.get("centerline_fading"))
+        self.haptics.gp_groove_enabled = bool(spec.get("learned_guidance"))
+        self.haptics.walls_enabled = bool(spec.get("walls")) and self.state == RECORDING
+
+    def _refresh_online_gp(self):
+        if not self.all_demos:
+            self.gp = TrajectoryGP()
+            self.gp_traj_phys = None
+            self.gp_traj_std = None
+            self.haptics.clear_gp_trajectory()
+            return
+
+        gp = TrajectoryGP()
+        gp.fit(self.all_demos)
+        gp_traj_phys, gp_traj_std = gp.predict(n_points=300, return_std=True)
+        self.gp = gp
+        self.gp_traj_phys = gp_traj_phys
+        self.gp_traj_std = gp_traj_std
+        self.haptics.set_gp_trajectory(
+            self.gp_traj_phys,
+            self.gp_traj_std,
+            n_demos=len(self.all_demos),
+        )
+
+    def _flatten_metric_row(self, record):
+        row = dict(record)
+        tlx = row.pop("tlx", None)
+        if isinstance(tlx, dict):
+            for key, value in tlx.items():
+                row[f"tlx_{key}"] = value
+        return row
+
+    def _write_metrics_csv(self, path, records):
+        if not records:
+            return
+        rows = [self._flatten_metric_row(record) for record in records]
+        fieldnames = sorted({key for row in rows for key in row.keys()})
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
     def _mode_label(self):
         if self.validation_mode:
-            return f"validation P{self.participant_number}/{self.participant_count} ({len(self.all_demos)}/{self.required_demos} demos)"
+            return f"validation P{self.participant_number} G{self.validation_group} ({len(self.all_demos)}/{self.required_demos} demos)"
         return "free"
 
     def _demo_success_rate(self, success_tol):
@@ -517,20 +597,10 @@ class PA3_Kinesthetic:
         if self.all_results:
             self.all_results[-1]["tlx"] = self.tlx_result
 
-    def _run_auto_analysis(self):
-        if not self.validation_mode:
-            return
-        try:
-            from scripts.analyze_results import run_analysis
-            run_analysis(results_dir=self.results_dir, out_dir=self.analysis_dir)
-            self.auto_analysis_status = f"Analysis updated in {self.analysis_dir}"
-        except Exception as exc:
-            self.auto_analysis_status = f"Analysis failed: {exc}"
-
     def _finalize_validation_condition(self):
-        self._run_nasa_tlx_dialog()
+        if self.tlx_result is None:
+            self._run_nasa_tlx_dialog()
         self._save_results()
-        self._run_auto_analysis()
         self._advance_validation_sequence()
 
     def _mouse_panel_pos(self, mouse_pos):
@@ -688,6 +758,63 @@ class PA3_Kinesthetic:
             surf = font.render(line, True, color)
             surface.blit(surf, (x, y + i * line_h))
 
+    def _draw_haptics_status_banner(self, surface):
+        panel_x = 16
+        panel_y = 16
+        card_w = 180
+        card_h = 88
+        gap = 12
+        pad = 12
+
+        title_font = pygame.font.SysFont("Arial", 18, bold=True)
+        value_font = pygame.font.SysFont("Arial", 38, bold=True)
+        meta_font = pygame.font.SysFont("Arial", 16, bold=True)
+
+        if self.validation_mode:
+            trial_value = f"{self.condition_cursor + 1}/{len(self.condition_order)}"
+            demo_value = f"{len(self.all_demos)}/{self.required_demos}"
+        else:
+            trial_value = f"{self.condition_id}"
+            demo_value = f"{len(self.all_demos)}"
+
+        demo_color = (120, 255, 170)
+        if self.validation_mode and len(self.all_demos) < self.required_demos:
+            demo_color = (255, 220, 120)
+        if self.state == RECORDING:
+            demo_color = (255, 140, 140)
+
+        cards = [
+            ("TRIAL" if self.validation_mode else "COND", trial_value, (120, 190, 255)),
+            ("DEMOS", demo_value, demo_color),
+        ]
+
+        for idx, (label, value, accent) in enumerate(cards):
+            x = panel_x + idx * (card_w + gap)
+            bg = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+            pygame.draw.rect(bg, (12, 18, 24, 215), bg.get_rect(), border_radius=12)
+            pygame.draw.rect(bg, accent, bg.get_rect(), width=3, border_radius=12)
+            surface.blit(bg, (x, panel_y))
+
+            label_surf = title_font.render(label, True, (230, 235, 240))
+            value_surf = value_font.render(value, True, accent)
+            surface.blit(label_surf, (x + pad, panel_y + 10))
+            surface.blit(value_surf, (x + pad, panel_y + 34))
+
+        meta_lines = []
+        if self.validation_mode:
+            meta_lines.append(f"Participant {self.participant_number}  Group {self.validation_group}")
+        else:
+            meta_lines.append(f"Participant {self.participant_number}  Free mode")
+        meta_lines.append(f"Condition {self.condition_id}: {self._current_condition_label()}")
+
+        meta_y = panel_y + card_h + 10
+        for idx, line in enumerate(meta_lines):
+            meta_bg = pygame.Surface((430, 24), pygame.SRCALPHA)
+            meta_bg.fill((10, 14, 20, 170))
+            surface.blit(meta_bg, (panel_x, meta_y + idx * 26))
+            meta_surf = meta_font.render(line, True, (235, 235, 235))
+            surface.blit(meta_surf, (panel_x + 10, meta_y + 3 + idx * 26))
+
     # ─── Main loop ──────────────────────────────────────────────────────
     def run(self):
         p = self.physics
@@ -761,6 +888,7 @@ class PA3_Kinesthetic:
                         mnd = mean_nearest_distance(demo_arr, self.tube.centerline)
                         self.per_demo_metrics.append(mnd)
                         self.per_demo_wall_hits.append(int(self.wall_hits))
+                        self._refresh_online_gp()
                         self.state = REVIEW
                     else:
                         self.state = IDLE
@@ -773,6 +901,7 @@ class PA3_Kinesthetic:
                     self.all_demo_times.pop()
                     self.per_demo_metrics.pop()
                     self.per_demo_wall_hits.pop()
+                    self._refresh_online_gp()
                 self.current_demo = []
                 self.state = IDLE
 
@@ -785,6 +914,10 @@ class PA3_Kinesthetic:
                     else:
                         self.state = IDLE
                 elif self.state == DONE:
+                    if self.validation_mode and self.pending_validation_finalize:
+                        self.pending_validation_finalize = False
+                        self._finalize_validation_condition()
+                        return
                     self.gp_traj_phys = None
                     self.gp_traj_std = None
                     self.trial_metrics = None
@@ -836,11 +969,26 @@ class PA3_Kinesthetic:
 
         frame_input_mode = self._effective_input_mode()
         frame_feedback_active = self._feedback_active()
+        self._sync_condition_feedback()
         g.device_connected = (frame_input_mode == "device")
 
         if frame_input_mode == "device":
-            pA0, pB0, pA, pB, pE = p.get_device_pos()
-            pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
+            try:
+                pA0, pB0, pA, pB, pE = p.get_device_pos()
+                pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
+            except ValueError:
+                self.device_connected = False
+                frame_input_mode = "mouse_fallback"
+                frame_feedback_active = self._feedback_active()
+                g.device_connected = False
+                self.auto_analysis_status = "Haply stream unavailable. Switched to mouse fallback."
+                if self.condition_spec["feedback_mode"] == "none":
+                    xh = self._mouse_panel_pos(xm)
+                else:
+                    xh = g.haptic.center
+                pos_phys_s = g.inv_convert_pos(xh)
+                pA0, pB0, pA, pB, pE = p.derive_device_pos(pos_phys_s)
+                pA0, pB0, pA, pB, xh = g.convert_pos(pA0, pB0, pA, pB, pE)
         else:
             if self.condition_spec["feedback_mode"] == "none":
                 xh = self._mouse_panel_pos(xm)
@@ -909,6 +1057,8 @@ class PA3_Kinesthetic:
                     mean_demo_time = float(np.mean(self.all_demo_times)) if self.all_demo_times else 0.0
                     self.trial_metrics["participant_number"] = self.participant_number
                     self.trial_metrics["participant_count"] = self.participant_count
+                    self.trial_metrics["validation_group"] = self.validation_group
+                    self.trial_metrics["condition_order"] = self.condition_order.copy()
                     self.trial_metrics["mode"] = self.mode
                     self.trial_metrics["required_demos_target"] = self.required_demos
                     self.trial_metrics["trial_index"] = len(self.all_results) + 1
@@ -926,16 +1076,15 @@ class PA3_Kinesthetic:
                     self.trial_metrics["last_demo_time_s"] = float(self.last_demo_time)
                     self.trial_metrics["hardware_connected"] = self.device_connected
                     self.all_results.append(self.trial_metrics.copy())
-                    self.run_results.append(self.trial_metrics.copy())
 
                 if self.auto_train:
-                    self.auto_train = False          # silent retrain: skip playback, back to IDLE
+                    self.auto_train = False
                     if self.pending_validation_finalize:
-                        self.pending_validation_finalize = False
+                        self.playback_idx = len(self.gp_traj_phys)
                         self.state = DONE
-                        self._finalize_validation_condition()
-                        return
-                    self.state = IDLE
+                        self.auto_analysis_status = "GP ready. Press P to replay or ENTER to save and continue."
+                    else:
+                        self.state = IDLE
                 else:
                     self.playback_idx = 0            # G was pressed: show playback as before
                     self.state = PLAYBACK
@@ -1001,6 +1150,8 @@ class PA3_Kinesthetic:
                              (int(xh[0]), int(xh[1])),
                              (int(xh[0] - fe[0] * fscale),
                               int(xh[1] - fe[1] * fscale)), 2)
+
+        self._draw_haptics_status_banner(g.screenHaptics)
 
         # ── Right: VR panel ─────────────────────────────────────────────
         g.draw_mars_vr_scene(
@@ -1145,7 +1296,7 @@ class PA3_Kinesthetic:
         y_base = g.window_size[1] - 160
         if self.state == IDLE:
             lines = [
-                f"Participant: {self.participant_number}/{self.participant_count}",
+                f"Participant: {self.participant_number}",
                 f"Demos: {n}  |  Crack: {self.tube_name}",
                 f"Condition {self.condition_id}: {self._current_condition_label()}",
                 f"Mode: {self._mode_label()}",
@@ -1158,13 +1309,13 @@ class PA3_Kinesthetic:
                 lines.append("F = interrupt validation and switch to free mode")
         elif self.state == REVIEW:
             lines = [
-                f"Participant: {self.participant_number}/{self.participant_count}",
+                f"Participant: {self.participant_number}",
                 f"Demo #{n} saved!  ({self.last_demo_time:.1f}s)",
                 f"Condition {self.condition_id}: {self._current_condition_label()}",
                 "ENTER = keep & next demo",
                 "D = delete this demo",
                 (
-                    f"ENTER = finalize condition at {n}/{self.required_demos} demos"
+                    f"ENTER = train GP and review condition at {n}/{self.required_demos} demos"
                     if self.validation_mode and n >= self.required_demos
                     else f"G = train GP on {n} demo{'s' if n > 1 else ''}"
                 ),
@@ -1181,19 +1332,19 @@ class PA3_Kinesthetic:
                     str(convergence_demos) if convergence_demos is not None else "not reached"
                 )
                 lines = [
-                    f"Participant: {self.participant_number}/{self.participant_count}",
+                    f"Participant: {self.participant_number}",
                     f"Condition {self.condition_id}: {self._current_condition_label()}",
                     f"Mode: {self._mode_label()}",
                     f"GP trained on {m['n_demos']} demos",
                     f"Inter-demo Frechet: {m['pairwise_frechet_m']*1000:.2f}mm  |  PLR: {m['path_length_ratio_mean']:.3f}",
                     f"Jerk: {m['jerk_mean']:.4f}  |  GP sigma: {m['gp_sigma_mean_m']*1000:.2f}mm",
                     f"Convergence demos: {convergence_label}  |  Convergence time: {convergence_time:.1f}s",
-                    "A = auto-play  |  P = replay  |  ENTER = add demos",
+                    "A = auto-play  |  P = replay  |  ENTER = save and next condition",
                     "N = NASA-TLX  |  F = switch to free  |  C = clear  |  Q = quit",
                 ]
             else:
                 lines = [
-                    f"Participant: {self.participant_number}/{self.participant_count}",
+                    f"Participant: {self.participant_number}",
                     f"Condition {self.condition_id}: {self._current_condition_label()}",
                     f"Mode: {self._mode_label()}",
                     f"GP trained on {len(self.all_demos)} demos",
@@ -1273,6 +1424,7 @@ class PA3_Kinesthetic:
             if current_metrics:
                 with open(folder / "metrics.json", "w") as f:
                     json.dump(current_metrics, f, indent=2, default=str)
+                self._write_metrics_csv(folder / "metrics.csv", current_metrics)
             for i, demo in enumerate(self.all_demos):
                 np.save(folder / f"demo_{i+1}.npy", demo)
             if self.gp_traj_phys is not None:
@@ -1283,6 +1435,8 @@ class PA3_Kinesthetic:
                 "run_id": self.run_id,
                 "participant_number": self.participant_number,
                 "participant_count": self.participant_count,
+                "validation_group": self.validation_group,
+                "condition_order": self.condition_order,
                 "mode": self.mode,
                 "required_demos_target": self.required_demos,
                 "tube": self.tube_name,
@@ -1309,6 +1463,7 @@ class PA3_Kinesthetic:
         if self.all_results:
             with open(folder / "metrics.json", "w") as f:
                 json.dump(self.all_results, f, indent=2, default=str)
+            self._write_metrics_csv(folder / "metrics.csv", self.all_results)
 
         for i, demo in enumerate(self.all_demos):
             np.save(folder / f"demo_{i+1}.npy", demo)

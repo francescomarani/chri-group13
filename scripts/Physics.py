@@ -64,29 +64,34 @@ class Physics:
             
             #THE DEVICE MUST HAVE THE TORQUE WRITTEN BEFORE IT CAN PROVIDE DATA!!!!!!!
             #This section prevents the program from not having available data for 1 to 2 initial frames
-            start_time = time.time()
-            while True:
-                if not self.haplyBoard.data_available():
-                    #port present, but no data available. Setting initial torques
-                    self.device.set_device_torques(np.zeros(2))
-                    self.device.device_write_torques()
-                    time.sleep(0.001) #pause for 1 millisecond
-                    if time.time()-start_time>5.0: #this is taking longer than 5 seconds...
-                        raise ValueError("Haply board present, but not providing data!")
-                else:
-                    #data now available! Proceed.
-                    print("[PHYSICS]: Haply found and data available. Ready to run!")
-                    break
+            if not self._wait_for_data(timeout_s=5.0):
+                raise ValueError("Haply board present, but not providing data!")
+            print("[PHYSICS]: Haply found and data available. Ready to run!")
         else:
             print("[PHYSICS]: No compatible device found.")
             self.device_present = False
+
+    def _wait_for_data(self, timeout_s=0.25):
+        if not self.device_present or not self.port:
+            return False
+
+        start_time = time.time()
+        while time.time() - start_time <= timeout_s:
+            if self.haplyBoard.data_available():
+                return True
+            # Re-send zero torques to kick the board back into streaming after
+            # blocking UI/analysis pauses in validation mode.
+            self.device.set_device_torques(np.zeros(2))
+            self.device.device_write_torques()
+            time.sleep(0.001)
+        return False
     
     def is_device_connected(self):
         return self.device_present
     
     def get_device_pos(self):
         #Get pantograph joint positions. Only works if a device is connected!
-        if self.device_present and self.port and self.haplyBoard.data_available():    ##If Haply is present
+        if self.device_present and self.port and (self.haplyBoard.data_available() or self._wait_for_data()):    ##If Haply is present
             #get device angles
             self.device.device_read_data()
             motorAngle = self.device.get_device_angles()

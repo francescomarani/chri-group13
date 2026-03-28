@@ -1,44 +1,49 @@
-# PA3 — Hull-Breach Kinesthetic Teaching
-### RO47013 Control in Human-Robot Interaction — TU Delft
+# PA3 - Hull-Breach Kinesthetic Teaching
+### RO47013 Control in Human-Robot Interaction - TU Delft
 
-This project studies how different input/feedback conditions affect
-kinesthetic teaching quality in a Mars habitat hull-breach sealing task.
-The operator demonstrates a trajectory through the crack corridor, then a
-trajectory model is trained from the collected demonstrations.
+This project studies how different haptic guidance conditions affect kinesthetic teaching quality in a Mars habitat hull-breach sealing task. The operator demonstrates trajectories through a crack corridor, then a Gaussian Process (GP) trajectory model is learned from those demonstrations.
 
 The application has:
-- a left haptic panel for the Haply device / mouse control
-- a right VR panel showing the habitat hull-breach scenario
-- per-session metric saving and NASA-TLX support
+- a left haptic panel for the Haply device or mouse fallback
+- a right VR panel showing the Mars greenhouse / hull-breach scene
+- validation-mode data logging for the experimental protocol
+- a separate analysis script for CSV summaries, Friedman tests, and plots
 
 ---
 
 ## Experimental Conditions
 
-The codebase is now organized around **six explicit conditions**.
-Select them with keys `1` to `6` while in `IDLE` and with no demos recorded.
+The current experiment uses **five** conditions.
 
-| Key | Condition | Input | Haptic feedback |
-|---|---|---|---|
-| `1` | Mouse only, no haptics | Mouse | None |
-| `2` | Haptic device, no feedback | Haply | None |
-| `3` | Haptic device, virtual walls only | Haply | Virtual wall feedback only |
-| `4` | Haptic device, fixed central guide | Haply | A constant centerline haptic guide |
-| `5` | Haptic device, fading central guide | Haply | A centerline guide that becomes weaker as confidence in the learned trajectory increases |
-| `6` | Haptic device, increasing learned guidance | Haply | Guidance toward the learned trajectory that becomes stronger as confidence increases |
+| ID | Code | Condition | Input | Feedback |
+|---|---|---|---|---|
+| `1` | `NH` | No haptics (baseline) | Haply | None |
+| `2` | `VW` | Virtual walls | Haply | Virtual walls only |
+| `3` | `CG` | Virtual walls + centerline guidance | Haply | Walls + fixed centerline groove |
+| `4` | `FG` | Virtual walls + fading centerline guidance | Haply | Walls + centerline groove that fades with confidence |
+| `5` | `SG` | Virtual walls + subjective trajectory guidance | Haply | Walls + learned GP guidance |
 
-### Notes on Conditions 4, 5 and 6
+Notes:
+- the old mouse-only experimental condition is no longer part of the protocol
+- mouse is now only a fallback when the Haply device is unavailable
+- virtual walls are active only while a demonstration is being recorded
+- the GP is refreshed after each accepted demonstration so guidance conditions can use the latest learned model during validation
 
-- Condition `4` is a fixed central guidance baseline.
-- Condition `5` starts from a centerline scaffold and fades that scaffold as the learned model becomes more reliable.
-- Condition `6` uses the learned trajectory itself as the haptic guide, and its stiffness increases with local confidence.
-- Only condition `3` provides virtual wall feedback. Conditions `4`–`6` are guidance conditions, not wall conditions.
-- In `free` mode the trajectory model is trained manually with `G`.
-- In `validation` mode the condition is finalized automatically once the required number of demonstrations has been collected.
+---
 
-This makes it possible to compare:
-- a prior-based assistive cue
-- a data-driven assistive cue
+## Counterbalancing
+
+Validation mode uses a 5-group Latin-square counterbalancing scheme for 20 participants. At startup, the script asks which group the participant belongs to unless `--group` is supplied on the command line.
+
+| Group | Participants | Condition order |
+|---|---|---|
+| `A` | `1, 6, 11, 16` | `NH -> VW -> CG -> FG -> SG` |
+| `B` | `2, 7, 12, 17` | `VW -> CG -> FG -> SG -> NH` |
+| `C` | `3, 8, 13, 18` | `CG -> FG -> SG -> NH -> VW` |
+| `D` | `4, 9, 14, 19` | `FG -> SG -> NH -> VW -> CG` |
+| `E` | `5, 10, 15, 20` | `SG -> NH -> VW -> CG -> FG` |
+
+The selected group is stored in the saved data as `validation_group`, together with the resolved `condition_order`.
 
 ---
 
@@ -60,64 +65,69 @@ conda env update -f environment.yml --prune
 conda activate chri-pa3
 ```
 
-### Run the project
+---
 
-#### Free mode
+## Running the App
 
-```bash
-cd /home/simone/chri-group13
-python PA3_main.py --mode free
-```
-
-In free mode:
-- you choose how many trials to perform
-- you choose how many demonstrations to collect before training with `G`
-- NASA-TLX and analysis plots are not generated automatically
-
-#### Validation mode
-
-Launch everything directly from the command line:
+### Free mode
 
 ```bash
 cd /home/simone/chri-group13
-python PA3_main.py --mode validation --participant-count 12 --required-demos 3
+python scripts/PA3_main.py --mode free
 ```
 
-Or let the script ask for missing values at startup:
+Free mode is intended for piloting, debugging, and open-ended trajectory collection. It does not compute validation metrics.
+
+### Validation mode
+
+Minimal launch:
 
 ```bash
 cd /home/simone/chri-group13
-python PA3_main.py --mode validation
+python scripts/PA3_main.py --mode validation
 ```
 
-In validation mode:
-- the required number of demonstrations per condition is fixed by `--required-demos`
-- a single run can execute the full experiment for all participants
-- `--participant-count` is the number of participants to run in this execution
-- after the condition is completed, the app automatically:
-  `1.` trains the trajectory model
-  `2.` opens the NASA-TLX questionnaire
-  `3.` saves the collected data
-  `4.` updates aggregate metrics and plots in the analysis folder
-  `5.` advances to the next condition, and after the last condition to the next participant
+Fully specified launch:
+
+```bash
+cd /home/simone/chri-group13
+python scripts/PA3_main.py --mode validation --participant-number 7 --group B --required-demos 3
+```
+
+Current validation behavior:
+- one launch handles exactly one participant
+- if `--participant-number` is missing, the script asks for it at startup
+- if `--group` is missing, the script asks for the counterbalancing group `A-E`
+- if `--required-demos` is omitted, it defaults to `3`
+- after the final condition, the application saves the run and closes automatically
+
+If `--mode` is omitted entirely, the script first asks whether to start in `free` or `validation`.
 
 ---
 
-## Project Structure
+## Validation Workflow
 
-| File | Description |
-|---|---|
-| `PA3_main.py` | Main state machine, condition presets, data collection, saving |
-| `haptics.py` | Virtual walls, fixed/fading centerline guidance, and confidence-scaled learned-trajectory guidance |
-| `gp_trajectory.py` | Trajectory learning from demonstrations |
-| `targets.py` | Tube/crack geometry and progress computation |
-| `Graphics.py` | Haptic panel and Mars habitat hull-breach VR rendering |
-| `metrics.py` | Quantitative trajectory metrics |
-| `analyze_results.py` | Aggregates saved trials and generates summary tables / plots |
-| `nasa_tlx.py` | NASA-TLX questionnaire |
-| `Physics.py` | Haply device interface |
-| `HaplyHAPI.py` | Low-level Haply API |
-| `environment.yml` | Conda environment definition |
+Validation mode is now designed for the actual experiment.
+
+Typical workflow:
+
+1. Launch `python scripts/PA3_main.py --mode validation`.
+2. Enter the participant number and the Latin-square group if they were not passed by CLI.
+3. The app starts from the first condition in that group's order.
+4. Press `SPACE` to start recording and `SPACE` again to stop recording.
+5. Press `ENTER` to accept the demo or `D` to discard the most recent one.
+6. Repeat until the target number of demos is reached.
+7. Press `ENTER` to train the final GP for that condition and review the learned trajectory.
+8. Use `P` or `A` to replay the learned GP if needed.
+9. Press `N` to fill NASA-TLX if it has not already been completed for that condition.
+10. Press `ENTER` again to save the condition and advance automatically to the next one.
+11. After the fifth condition, the participant run is saved and the application exits automatically.
+
+Additional notes:
+- during validation, conditions advance automatically according to the selected group
+- `F` can interrupt validation and switch to `free`
+- the left panel now shows a large status banner with current trial number and demo count
+- the right panel still shows the detailed instructions and metric review text
 
 ---
 
@@ -125,74 +135,57 @@ In validation mode:
 
 | Key | Action |
 |---|---|
-| `1`–`6` | Select experimental condition in free mode (`IDLE`, no demos only) |
+| `1`-`5` | Select condition in free mode only (`IDLE`, no demos recorded) |
 | `SPACE` | Start / stop recording a demonstration |
-| `ENTER` | Confirm demo / continue, or finalize the condition in validation mode |
-| `D` | Delete the last demo in `REVIEW` |
-| `G` | Train the trajectory model on all demos |
-| `M` | Toggle between free mode and validation mode from a clean idle state |
-| `P` | Replay the learned trajectory |
-| `A` | Autonomous replay with the PD controller |
-| `N` | Open NASA-TLX after training |
-| `T` | Cycle the crack/tube shape in free mode (`IDLE`, no demos only) |
-| `C` | Clear all demos and reset the current session |
+| `ENTER` | Confirm demo, continue, or save / advance in validation |
+| `D` | Delete the last demo |
+| `G` | Train GP manually |
+| `P` | Replay the GP trajectory |
+| `A` | Autonomous GP replay with PD control |
+| `N` | Open NASA-TLX |
+| `F` | Interrupt validation and switch to free mode |
+| `M` | Toggle mode from a clean idle state |
+| `T` | Change crack / tube in free mode |
+| `C` | Clear demos and reset the current condition |
 | `R` | Toggle linkage rendering |
-| `Q` | Quit and save results |
+| `Q` | Quit and save the current session |
 
 ---
 
-## Usage Modes
+## Project Structure
+
+| File | Description |
+|---|---|
+| `scripts/PA3_main.py` | Main state machine, experiment flow, saving, validation logic |
+| `scripts/haptics.py` | Virtual walls and guidance logic |
+| `scripts/gp_trajectory.py` | GP trajectory learning |
+| `scripts/targets.py` | Tube / crack geometry |
+| `scripts/Graphics.py` | Haptic panel and VR rendering |
+| `scripts/metrics.py` | Validation metrics |
+| `scripts/analyze_results.py` | Offline aggregation, statistics, and plots |
+| `scripts/nasa_tlx.py` | NASA-TLX questionnaire |
+| `scripts/Physics.py` | Haply interface and mouse fallback support |
+| `scripts/HaplyHAPI.py` | Low-level Haply API |
+| `assets/` | Images used by the UI |
+
+---
+
+## Saved Data
+
+Results are saved under `results/`.
 
 ### Free mode
 
-Use this mode for prototyping, debugging, pilot tests, or open-ended demonstrations.
-
-Typical workflow:
-
-1. Start the program with `--mode free`.
-2. Select a condition with `1`–`6`.
-3. Record as many demonstrations as you want.
-4. Train manually with `G` when you decide you have enough data.
-5. Optionally replay with `P` or `A`.
-6. Optionally open NASA-TLX with `N`.
-7. Quit with `Q` to save the session.
-
-### Validation mode
-
-Use this mode for the actual experimental protocol. One launch can process the full participant pool.
-
-Typical workflow:
-
-1. Start the program with `--mode validation`.
-2. The app starts from the first condition of the current participant and keeps the crack geometry fixed.
-3. Record demonstrations with `SPACE` until the configured target is reached.
-4. Accept each demo with `ENTER` or delete it with `D`.
-5. When the target number of demos has been reached, press `ENTER` to finalize that condition.
-6. The application automatically trains, opens NASA-TLX, saves the condition data, refreshes the analysis outputs, and moves to the next condition.
-7. After the last condition, the app automatically resets for the next participant.
-8. After the last participant, the run is marked complete and you can quit with `Q`.
-
-Notes:
-- conditions advance automatically in validation mode
-- participants are handled internally as `participant_01`, `participant_02`, ...
-- you can switch between `free` and `validation` with `M` only from a clean idle state
-
----
-
-## Output
-
-Results are saved to:
+Free-mode sessions are saved to:
 
 ```text
-free mode:       results/session_<timestamp>/
-validation mode: results/validation_run_<timestamp>/
+results/session_<timestamp>/
 ```
 
-In free mode each session contains:
+Typical contents:
 
 ```text
 summary.json
-metrics.json
 demo_1.npy
 demo_2.npy
 ...
@@ -200,55 +193,84 @@ gp_trajectory.npy
 gp_std.npy
 ```
 
-In validation mode the structure is:
+Free mode is meant for exploration, so it does not compute the validation metrics used in the formal analysis.
+
+### Validation mode
+
+Validation runs are saved to:
+
+```text
+results/validation_run_<timestamp>/
+```
+
+Structure:
 
 ```text
 results/validation_run_<timestamp>/
   run_summary.json
   all_metrics.json
+  all_metrics.csv
   participant_01/
     participant_summary.json
     metrics.json
-    condition_1_mouse_only_no_haptics/
+    metrics.csv
+    condition_1_haply_no_feedback/
       summary.json
       metrics.json
+      metrics.csv
       demo_1.npy
+      demo_2.npy
       ...
+      gp_trajectory.npy
+      gp_std.npy
 ```
 
-The saved metadata now includes:
+The saved metadata includes at least:
 - `participant_number`
-- `participant_count`
-- `mode`
+- `validation_group`
+- `condition_order`
 - `required_demos_target`
-- `trial_index`
 - `condition_id`
 - `condition`
 - `condition_label`
 - `input_mode`
 - `feedback_mode`
 - `hardware_connected`
+- `tube`
+- `n_demos`
 
-The saved trial metrics now also include:
+The validation metrics include:
+- `pairwise_frechet_m`
+- `path_length_ratio_mean`
+- `jerk_mean`
+- `gp_sigma_mean_m`
+- `gp_sigma_by_demo_m`
+- `path_length_ratio_by_demo`
+- `jerk_by_demo`
+- `demos_to_convergence`
+- `cumulative_demo_time_to_convergence_s`
 - `completion_time_s`
-- `mean_demo_time_s`
-- `wall_hit_events_total`
-- `wall_hit_events_mean`
-- `per_demo_wall_hits`
-- `demo_success_rate`
-- `success`
-- `demo_start_error`, `demo_end_error`
-- `gp_start_error`, `gp_end_error`
+- `tlx_*` fields when NASA-TLX is completed
 
 ---
 
 ## Analysis
 
-To aggregate all saved sessions and generate CSV summaries plus plots:
+Run the analysis script after collecting as many participants as you want:
 
 ```bash
 cd /home/simone/chri-group13
-python analyze_results.py --results-dir results --out-dir analysis
+python scripts/analyze_results.py --results-dir results --out-dir analysis
+```
+
+By default, if a graphical display is available, the script:
+- saves the plots to `analysis/plots/`
+- shows the plots on screen
+
+If you only want files and no plot windows:
+
+```bash
+python scripts/analyze_results.py --results-dir results --out-dir analysis --no-show
 ```
 
 This creates:
@@ -260,9 +282,13 @@ analysis/friedman_tests.json
 analysis/plots/*.png
 ```
 
-If `participant_number` is available, the script also computes Friedman repeated-measures tests for the main metrics.
+Useful notes:
+- the script scans `metrics.csv` files recursively under `--results-dir`
+- if you want to analyze one specific batch only, point `--results-dir` to a single folder such as `results/validation_run_<timestamp>`
+- descriptive summaries and plots can be generated for any number of participants
+- Friedman repeated-measures tests are only meaningful when there are enough participants with complete data across all conditions
 
-In validation mode this analysis step is also executed automatically after each completed condition and the run summary is refreshed after each participant.
+Analysis is no longer executed automatically by the validation app. Data collection and offline analysis are now deliberately separated.
 
 ---
 
@@ -282,7 +308,6 @@ The environment installs:
 
 ## Hardware Note
 
-Conditions `2` to `6` are designed for the Haply device.
-If no device is connected, the application can still fall back to mouse-based
-interaction for testing, but that fallback is only intended for debugging and
-not for the final experimental protocol.
+These experimental conditions are designed for the Haply device.
+
+If no compatible device is detected, the application falls back to mouse-based interaction so the software can still be tested. That fallback is useful for debugging, but it is not intended for the final experimental protocol.
