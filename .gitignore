@@ -7,6 +7,8 @@ __pycache__/
 
 .DS_Store
 
+.vscode/
+space_debris/
 results/
 analysis/
 
