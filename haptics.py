@@ -208,14 +208,25 @@ class TubeHaptics:
 
                 self.last_wall_force = f_mag
 
-                # Proxy visualization: project onto wall surface
+                # Only count as "wall contact" near the sharp Gaussian zone
+                # (the halo should NOT disable groove guidance)
+                sharp_cutoff = 3.0 * self.wall_sigma
                 wall_name = 'left' if signed_d_g > 0 else 'right'
-                self.proxy_pos = self._wall_point(idx_g, wall_name)
-                self.proxy_idx = idx_g
-                self.last_proxy_pos = self.proxy_pos.copy()
-                self.last_wall = wall_name
-                self.contact_wall = wall_name
-                self.last_penetration = max(0.0, -d_wall)  # >0 when outside tube
+                if d_wall < sharp_cutoff:
+                    self.proxy_pos = self._wall_point(idx_g, wall_name)
+                    self.proxy_idx = idx_g
+                    self.last_proxy_pos = self.proxy_pos.copy()
+                    self.last_wall = wall_name
+                    self.contact_wall = wall_name
+                    self.last_penetration = max(0.0, -d_wall)
+                else:
+                    # In halo zone: wall force active, but groove stays on
+                    self.proxy_pos = pos.copy()
+                    self.proxy_idx = idx_g
+                    self.contact_wall = None
+                    self.last_penetration = 0.0
+                    self.last_wall = None
+                    self.last_proxy_pos = None
             else:
                 # Far from walls: no wall force
                 self.proxy_pos = pos.copy()
