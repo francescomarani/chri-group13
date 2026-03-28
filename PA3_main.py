@@ -33,7 +33,13 @@ from Graphics import Graphics
 from targets import get_tube, TUBE_NAMES
 from haptics import TubeHaptics
 from gp_trajectory import TrajectoryGP
-from metrics import compute_all_metrics, mean_nearest_distance
+from metrics import (
+    average_pairwise_frechet,
+    compute_all_metrics,
+    mean_jerk_magnitude,
+    mean_nearest_distance,
+    path_length_ratio,
+)
 from nasa_tlx import run_nasa_tlx
 
 IDLE, RECORDING, REVIEW, TRAINING, PLAYBACK, DONE, AUTO_PLAY = range(7)
@@ -429,6 +435,72 @@ class PA3_Kinesthetic:
                 successes += 1
         return float(successes / len(self.all_demos))
 
+    def _compute_validation_metrics(self):
+        """
+        Compute validation-only metrics.
+
+        These are deliberately reference-free for accuracy, plus GP-convergence
+        metrics derived from refitting the GP after each accumulated demo set.
+        """
+        sigma_threshold_m = 0.005  # 5 mm
+        n_points = 300
+
+        pairwise_frechet_m = average_pairwise_frechet(self.all_demos)
+
+        per_demo_sigma_mean_m = []
+        per_demo_gp_path_length_m = []
+        per_demo_path_length_ratio = []
+        per_demo_jerk = []
+
+        final_gp_traj = None
+        final_gp_std = None
+
+        for idx in range(len(self.all_demos)):
+            demo_subset = self.all_demos[: idx + 1]
+            gp_tmp = TrajectoryGP()
+            gp_tmp.fit(demo_subset)
+            gp_traj, gp_std = gp_tmp.predict(n_points=n_points, return_std=True)
+
+            sigma_mean_m = float(np.mean(np.linalg.norm(gp_std, axis=1)))
+            per_demo_sigma_mean_m.append(sigma_mean_m)
+            gp_len_m = float(np.sum(np.linalg.norm(np.diff(gp_traj, axis=0), axis=1)))
+            per_demo_gp_path_length_m.append(gp_len_m)
+
+            demo = self.all_demos[idx]
+            demo_time = self.all_demo_times[idx] if idx < len(self.all_demo_times) else None
+            per_demo_path_length_ratio.append(path_length_ratio(demo, gp_traj))
+            per_demo_jerk.append(mean_jerk_magnitude(demo, duration_s=demo_time))
+
+            if idx == len(self.all_demos) - 1:
+                final_gp_traj = gp_traj
+                final_gp_std = gp_std
+
+        demos_to_convergence = None
+        cumulative_demo_time_to_convergence_s = None
+        for idx, sigma_mean_m in enumerate(per_demo_sigma_mean_m):
+            if sigma_mean_m <= sigma_threshold_m:
+                demos_to_convergence = idx + 1
+                cumulative_demo_time_to_convergence_s = float(sum(self.all_demo_times[: idx + 1]))
+                break
+
+        if cumulative_demo_time_to_convergence_s is None:
+            cumulative_demo_time_to_convergence_s = float(sum(self.all_demo_times))
+
+        metrics = {
+            "pairwise_frechet_m": float(pairwise_frechet_m),
+            "path_length_ratio_mean": float(np.mean(per_demo_path_length_ratio)) if per_demo_path_length_ratio else 1.0,
+            "jerk_mean": float(np.mean(per_demo_jerk)) if per_demo_jerk else 0.0,
+            "gp_sigma_mean_m": float(per_demo_sigma_mean_m[-1]) if per_demo_sigma_mean_m else 0.0,
+            "gp_sigma_by_demo_m": per_demo_sigma_mean_m,
+            "gp_path_length_by_demo_m": per_demo_gp_path_length_m,
+            "path_length_ratio_by_demo": per_demo_path_length_ratio,
+            "jerk_by_demo": per_demo_jerk,
+            "gp_sigma_convergence_threshold_m": sigma_threshold_m,
+            "demos_to_convergence": demos_to_convergence,
+            "cumulative_demo_time_to_convergence_s": float(cumulative_demo_time_to_convergence_s),
+        }
+        return metrics, final_gp_traj, final_gp_std
+
     def _run_nasa_tlx_dialog(self):
         self.graphics.close()
         self.tlx_result = run_nasa_tlx()
@@ -814,25 +886,20 @@ class PA3_Kinesthetic:
 
                 self.gp = TrajectoryGP()
                 self.gp.fit(self.all_demos)
-                self.gp_traj_phys, self.gp_traj_std = self.gp.predict(
-                    n_points=300, return_std=True)
+
+                if self.validation_mode:
+                    self.trial_metrics, self.gp_traj_phys, self.gp_traj_std = self._compute_validation_metrics()
+                else:
+                    self.gp_traj_phys, self.gp_traj_std = self.gp.predict(
+                        n_points=300, return_std=True)
+                    self.trial_metrics = compute_all_metrics(
+                        np.concatenate(self.all_demos),
+                        self.gp_traj_phys, self.tube.centerline)
 
                 self.haptics.set_gp_trajectory(self.gp_traj_phys, self.gp_traj_std, n_demos=len(self.all_demos))
 
-
-                self.trial_metrics = compute_all_metrics(
-                    np.concatenate(self.all_demos),
-                    self.gp_traj_phys, self.tube.centerline)
-                success_tol = float(self.tube.half_width)
                 total_demo_time = float(sum(self.all_demo_times))
                 mean_demo_time = float(np.mean(self.all_demo_times)) if self.all_demo_times else 0.0
-                wall_hits_total = int(sum(self.per_demo_wall_hits))
-                wall_hits_mean = float(np.mean(self.per_demo_wall_hits)) if self.per_demo_wall_hits else 0.0
-                gp_success = (
-                    self.trial_metrics["gp_mnd"] <= success_tol
-                    and self.trial_metrics["gp_start_error"] <= success_tol
-                    and self.trial_metrics["gp_end_error"] <= success_tol
-                )
 
                 self.trial_metrics["participant_number"] = self.participant_number
                 self.trial_metrics["participant_count"] = self.participant_count
@@ -851,15 +918,24 @@ class PA3_Kinesthetic:
                 self.trial_metrics["total_demo_time_s"] = total_demo_time
                 self.trial_metrics["completion_time_s"] = total_demo_time
                 self.trial_metrics["last_demo_time_s"] = float(self.last_demo_time)
-                self.trial_metrics["per_demo_mnd"] = self.per_demo_metrics.copy()
-                self.trial_metrics["per_demo_wall_hits"] = self.per_demo_wall_hits.copy()
-                self.trial_metrics["wall_hit_events_total"] = wall_hits_total
-                self.trial_metrics["wall_hit_events_mean"] = wall_hits_mean
-                self.trial_metrics["success_tolerance_m"] = success_tol
-                self.trial_metrics["demo_success_rate"] = self._demo_success_rate(success_tol)
-                self.trial_metrics["gp_success"] = bool(gp_success)
-                self.trial_metrics["success"] = bool(gp_success)
                 self.trial_metrics["hardware_connected"] = self.device_connected
+                if not self.validation_mode:
+                    success_tol = float(self.tube.half_width)
+                    wall_hits_total = int(sum(self.per_demo_wall_hits))
+                    wall_hits_mean = float(np.mean(self.per_demo_wall_hits)) if self.per_demo_wall_hits else 0.0
+                    gp_success = (
+                        self.trial_metrics["gp_mnd"] <= success_tol
+                        and self.trial_metrics["gp_start_error"] <= success_tol
+                        and self.trial_metrics["gp_end_error"] <= success_tol
+                    )
+                    self.trial_metrics["per_demo_mnd"] = self.per_demo_metrics.copy()
+                    self.trial_metrics["per_demo_wall_hits"] = self.per_demo_wall_hits.copy()
+                    self.trial_metrics["wall_hit_events_total"] = wall_hits_total
+                    self.trial_metrics["wall_hit_events_mean"] = wall_hits_mean
+                    self.trial_metrics["success_tolerance_m"] = success_tol
+                    self.trial_metrics["demo_success_rate"] = self._demo_success_rate(success_tol)
+                    self.trial_metrics["gp_success"] = bool(gp_success)
+                    self.trial_metrics["success"] = bool(gp_success)
                 self.all_results.append(self.trial_metrics.copy())
                 if self.validation_mode:
                     self.run_results.append(self.trial_metrics.copy())
@@ -1037,7 +1113,10 @@ class PA3_Kinesthetic:
                             f"prog={prog*100:.0f}%",
                             f"wall_hits={self.wall_hits}"]
         if self.trial_metrics and self.state in (PLAYBACK, DONE):
-            debug_parts.append(f"GP_MND={self.trial_metrics['gp_mnd']*1000:.1f}mm")
+            if self.validation_mode:
+                debug_parts.append(f"σ={self.trial_metrics['gp_sigma_mean_m']*1000:.1f}mm")
+            else:
+                debug_parts.append(f"GP_MND={self.trial_metrics['gp_mnd']*1000:.1f}mm")
         if self.validation_mode:
             debug_parts.append(f"target={self.required_demos}")
 
@@ -1096,8 +1175,6 @@ class PA3_Kinesthetic:
                 f"Participant: {self.participant_number}/{self.participant_count}",
                 f"Demo #{n} saved!  ({self.last_demo_time:.1f}s)",
                 f"Condition {self.condition_id}: {self._current_condition_label()}",
-                f"MND from center: {self.per_demo_metrics[-1]*1000:.1f}mm",
-                f"Wall hits: {self.per_demo_wall_hits[-1]}",
                 "ENTER = keep & next demo",
                 "D = delete this demo",
                 (
@@ -1106,19 +1183,42 @@ class PA3_Kinesthetic:
                     else f"G = train GP on {n} demo{'s' if n > 1 else ''}"
                 ),
             ]
+            if self.validation_mode:
+                lines.insert(3, "Validation metrics are computed at condition finalization")
+            else:
+                lines.insert(3, f"MND from center: {self.per_demo_metrics[-1]*1000:.1f}mm")
+                lines.insert(4, f"Wall hits: {self.per_demo_wall_hits[-1]}")
         elif self.state == DONE:
             m = self.trial_metrics
-            lines = [
-                f"Participant: {self.participant_number}/{self.participant_count}",
-                f"Condition {self.condition_id}: {self._current_condition_label()}",
-                f"Mode: {self._mode_label()}",
-                f"GP trained on {m['n_demos']} demos",
-                f"GP MND: {m['gp_mnd']*1000:.2f}mm  |  "
-                f"Hausdorff: {m['gp_hausdorff']*1000:.2f}mm",
-                f"Time: {m['total_demo_time_s']:.1f}s  |  Wall hits: {m['wall_hit_events_total']}  |  Success: {int(m['success'])}",
-                "A = auto-play  |  P = replay  |  ENTER = add demos",
-                "N = NASA-TLX  |  C = clear  |  Q = quit",
-            ]
+            if self.validation_mode:
+                convergence_demos = m["demos_to_convergence"]
+                convergence_time = m["cumulative_demo_time_to_convergence_s"]
+                convergence_label = (
+                    str(convergence_demos) if convergence_demos is not None else "not reached"
+                )
+                lines = [
+                    f"Participant: {self.participant_number}/{self.participant_count}",
+                    f"Condition {self.condition_id}: {self._current_condition_label()}",
+                    f"Mode: {self._mode_label()}",
+                    f"GP trained on {m['n_demos']} demos",
+                    f"Inter-demo Frechet: {m['pairwise_frechet_m']*1000:.2f}mm  |  PLR: {m['path_length_ratio_mean']:.3f}",
+                    f"Jerk: {m['jerk_mean']:.4f}  |  GP sigma: {m['gp_sigma_mean_m']*1000:.2f}mm",
+                    f"Convergence demos: {convergence_label}  |  Convergence time: {convergence_time:.1f}s",
+                    "A = auto-play  |  P = replay  |  ENTER = add demos",
+                    "N = NASA-TLX  |  C = clear  |  Q = quit",
+                ]
+            else:
+                lines = [
+                    f"Participant: {self.participant_number}/{self.participant_count}",
+                    f"Condition {self.condition_id}: {self._current_condition_label()}",
+                    f"Mode: {self._mode_label()}",
+                    f"GP trained on {m['n_demos']} demos",
+                    f"GP MND: {m['gp_mnd']*1000:.2f}mm  |  "
+                    f"Hausdorff: {m['gp_hausdorff']*1000:.2f}mm",
+                    f"Time: {m['total_demo_time_s']:.1f}s  |  Wall hits: {m['wall_hit_events_total']}  |  Success: {int(m['success'])}",
+                    "A = auto-play  |  P = replay  |  ENTER = add demos",
+                    "N = NASA-TLX  |  C = clear  |  Q = quit",
+                ]
         else:
             lines = []
 

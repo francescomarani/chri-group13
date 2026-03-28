@@ -90,6 +90,46 @@ def path_length(traj):
     return float(np.sum(np.linalg.norm(np.diff(traj, axis=0), axis=1)))
 
 
+def average_pairwise_frechet(demos):
+    """Average discrete Fréchet distance across all unique demo pairs."""
+    demos = [np.asarray(demo, dtype=float) for demo in demos if len(demo) >= 2]
+    if len(demos) < 2:
+        return 0.0
+    values = []
+    for i in range(len(demos)):
+        for j in range(i + 1, len(demos)):
+            values.append(frechet_discrete(demos[i], demos[j]))
+    return float(np.mean(values)) if values else 0.0
+
+
+def path_length_ratio(traj, ref):
+    """Path-length ratio = trajectory length / reference trajectory length."""
+    denom = path_length(ref)
+    if denom <= 1e-12:
+        return 1.0
+    return float(path_length(traj) / denom)
+
+
+def mean_jerk_magnitude(traj, duration_s=None):
+    """
+    Mean jerk magnitude for a 2D trajectory.
+
+    If duration_s is omitted, samples are assumed uniformly spaced with dt=1.
+    """
+    traj = np.asarray(traj, dtype=float)
+    if len(traj) < 4:
+        return 0.0
+    if duration_s is None or duration_s <= 0:
+        dt = 1.0
+    else:
+        dt = float(duration_s) / max(len(traj) - 1, 1)
+    vel = np.diff(traj, axis=0) / dt
+    acc = np.diff(vel, axis=0) / dt
+    jerk = np.diff(acc, axis=0) / dt
+    mags = np.linalg.norm(jerk, axis=1)
+    return float(np.mean(mags)) if len(mags) else 0.0
+
+
 def endpoint_errors(traj, ref):
     """Start/end point errors between a trajectory and a reference curve."""
     traj = np.asarray(traj)

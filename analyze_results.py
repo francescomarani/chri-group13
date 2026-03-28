@@ -24,14 +24,13 @@ from scipy.stats import friedmanchisquare
 
 
 DEFAULT_METRICS = [
-    "gp_mnd",
-    "gp_hausdorff",
-    "gp_frechet",
-    "gp_dtw",
+    "pairwise_frechet_m",
+    "path_length_ratio_mean",
+    "jerk_mean",
+    "gp_sigma_mean_m",
+    "demos_to_convergence",
+    "cumulative_demo_time_to_convergence_s",
     "completion_time_s",
-    "wall_hit_events_total",
-    "demo_success_rate",
-    "success",
     "tlx_overall",
 ]
 
