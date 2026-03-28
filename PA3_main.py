@@ -2,14 +2,15 @@
 """
 PA3 — Kinesthetic Teaching for Hull-Breach Sealing
 --------------------------------------------------
-Six explicit experimental conditions are supported:
+Five explicit experimental conditions are supported:
 
-1. Mouse only, no haptics
-2. Haply device, no feedback
-3. Haply device, virtual walls only
-4. Haply device, fixed centerline guidance
-5. Haply device, fading centerline guidance
-6. Haply device, increasing learned-trajectory guidance
+1. Haply device, no feedback
+2. Haply device, virtual walls only
+3. Haply device, fixed centerline guidance
+4. Haply device, fading centerline guidance
+5. Haply device, increasing learned-trajectory guidance
+
+If the Haply device is unavailable, mouse input is used only as an automatic fallback.
 """
 
 import argparse
@@ -35,7 +36,6 @@ from haptics import TubeHaptics
 from gp_trajectory import TrajectoryGP
 from metrics import (
     average_pairwise_frechet,
-    compute_all_metrics,
     mean_jerk_magnitude,
     mean_nearest_distance,
     path_length_ratio,
@@ -53,17 +53,6 @@ DEMO_COLORS = [
 
 CONDITION_SPECS = {
     1: {
-        "slug": "mouse_only_no_haptics",
-        "label": "Mouse only, no haptics",
-        "input_mode": "mouse",
-        "feedback_mode": "none",
-        "walls": False,
-        "centerline": False,
-        "centerline_fading": False,
-        "learned_guidance": False,
-        "auto_retrain": False,
-    },
-    2: {
         "slug": "haply_no_feedback",
         "label": "Haply device, no feedback",
         "input_mode": "device",
@@ -74,7 +63,7 @@ CONDITION_SPECS = {
         "learned_guidance": False,
         "auto_retrain": False,
     },
-    3: {
+    2: {
         "slug": "haply_virtual_walls_only",
         "label": "Haply device, virtual walls only",
         "input_mode": "device",
@@ -87,7 +76,7 @@ CONDITION_SPECS = {
         "guidance_fade_start": 0.55,
         "guidance_fade_end": 0.90,
     },
-    4: {
+    3: {
         "slug": "haply_fixed_centerline_guidance",
         "label": "Haply device, fixed central guide + walls",
         "input_mode": "device",
@@ -100,7 +89,7 @@ CONDITION_SPECS = {
         "guidance_fade_start": 0.75,
         "guidance_fade_end": 0.95,
     },
-    5: {
+    4: {
         "slug": "haply_fading_centerline_guidance",
         "label": "Haply device, fading central guide + walls",
         "input_mode": "device",
@@ -113,7 +102,7 @@ CONDITION_SPECS = {
         "guidance_fade_start": 0.75,
         "guidance_fade_end": 0.95,
     },
-    6: {
+    5: {
         "slug": "haply_increasing_learned_guidance",
         "label": "Haply device, increasing learned guidance + walls",
         "input_mode": "device",
@@ -378,8 +367,6 @@ class PA3_Kinesthetic:
         return self.condition_spec["label"]
 
     def _effective_input_mode(self):
-        if self.condition_spec["input_mode"] == "mouse":
-            return "mouse"
         return "device" if self.device_connected else "mouse_fallback"
 
     def _feedback_active(self):
@@ -655,7 +642,7 @@ class PA3_Kinesthetic:
             "A      auto-reproduce GP",
             f"COND   [{cond}] {cond_name}",
             (
-                "1-6    select condition"
+                "1-5    select condition"
                 if not self.validation_mode else "COND   automatic sequence"
             ),
             "M      toggle mode",
@@ -707,18 +694,16 @@ class PA3_Kinesthetic:
                 else:
                     self.auto_analysis_status = "Mode can only change from a clean idle state."
 
-            if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6')):
+            if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
                 if self.validation_mode:
                     self.auto_analysis_status = "Validation mode advances conditions automatically."
                 elif self._can_change_condition():
                     self._prepare_free_condition_switch()
                     self._apply_condition(int(chr(key)))
-                    if self.condition_id == 3:
-                        self.auto_analysis_status = "Condition 3 selected: virtual walls are active."
+                    if self.condition_id == 2:
+                        self.auto_analysis_status = "Condition 2 selected: virtual walls are active."
                     else:
-                        self.auto_analysis_status = (
-                            f"Condition {self.condition_id} selected. Note: walls are only active in condition 3."
-                        )
+                        self.auto_analysis_status = f"Condition {self.condition_id} selected."
 
             # T → cycle tube (only when idle and no demos)
             if key == ord('t') and self._can_change_condition():
@@ -892,52 +877,32 @@ class PA3_Kinesthetic:
                 else:
                     self.gp_traj_phys, self.gp_traj_std = self.gp.predict(
                         n_points=300, return_std=True)
-                    self.trial_metrics = compute_all_metrics(
-                        np.concatenate(self.all_demos),
-                        self.gp_traj_phys, self.tube.centerline)
+                    self.trial_metrics = None
 
                 self.haptics.set_gp_trajectory(self.gp_traj_phys, self.gp_traj_std, n_demos=len(self.all_demos))
 
-                total_demo_time = float(sum(self.all_demo_times))
-                mean_demo_time = float(np.mean(self.all_demo_times)) if self.all_demo_times else 0.0
-
-                self.trial_metrics["participant_number"] = self.participant_number
-                self.trial_metrics["participant_count"] = self.participant_count
-                self.trial_metrics["mode"] = self.mode
-                self.trial_metrics["required_demos_target"] = self.required_demos if self.validation_mode else None
-                self.trial_metrics["trial_index"] = len(self.all_results) + 1
-                self.trial_metrics["condition_id"] = self.condition_id
-                self.trial_metrics["condition"] = self.condition_spec["slug"]
-                self.trial_metrics["condition_label"] = self.condition_spec["label"]
-                self.trial_metrics["input_mode"] = self._effective_input_mode()
-                self.trial_metrics["feedback_mode"] = self.condition_spec["feedback_mode"]
-                self.trial_metrics["tube"] = self.tube_name
-                self.trial_metrics["n_demos"] = len(self.all_demos)
-                self.trial_metrics["demo_times"] = self.all_demo_times.copy()
-                self.trial_metrics["mean_demo_time_s"] = mean_demo_time
-                self.trial_metrics["total_demo_time_s"] = total_demo_time
-                self.trial_metrics["completion_time_s"] = total_demo_time
-                self.trial_metrics["last_demo_time_s"] = float(self.last_demo_time)
-                self.trial_metrics["hardware_connected"] = self.device_connected
-                if not self.validation_mode:
-                    success_tol = float(self.tube.half_width)
-                    wall_hits_total = int(sum(self.per_demo_wall_hits))
-                    wall_hits_mean = float(np.mean(self.per_demo_wall_hits)) if self.per_demo_wall_hits else 0.0
-                    gp_success = (
-                        self.trial_metrics["gp_mnd"] <= success_tol
-                        and self.trial_metrics["gp_start_error"] <= success_tol
-                        and self.trial_metrics["gp_end_error"] <= success_tol
-                    )
-                    self.trial_metrics["per_demo_mnd"] = self.per_demo_metrics.copy()
-                    self.trial_metrics["per_demo_wall_hits"] = self.per_demo_wall_hits.copy()
-                    self.trial_metrics["wall_hit_events_total"] = wall_hits_total
-                    self.trial_metrics["wall_hit_events_mean"] = wall_hits_mean
-                    self.trial_metrics["success_tolerance_m"] = success_tol
-                    self.trial_metrics["demo_success_rate"] = self._demo_success_rate(success_tol)
-                    self.trial_metrics["gp_success"] = bool(gp_success)
-                    self.trial_metrics["success"] = bool(gp_success)
-                self.all_results.append(self.trial_metrics.copy())
                 if self.validation_mode:
+                    total_demo_time = float(sum(self.all_demo_times))
+                    mean_demo_time = float(np.mean(self.all_demo_times)) if self.all_demo_times else 0.0
+                    self.trial_metrics["participant_number"] = self.participant_number
+                    self.trial_metrics["participant_count"] = self.participant_count
+                    self.trial_metrics["mode"] = self.mode
+                    self.trial_metrics["required_demos_target"] = self.required_demos
+                    self.trial_metrics["trial_index"] = len(self.all_results) + 1
+                    self.trial_metrics["condition_id"] = self.condition_id
+                    self.trial_metrics["condition"] = self.condition_spec["slug"]
+                    self.trial_metrics["condition_label"] = self.condition_spec["label"]
+                    self.trial_metrics["input_mode"] = self._effective_input_mode()
+                    self.trial_metrics["feedback_mode"] = self.condition_spec["feedback_mode"]
+                    self.trial_metrics["tube"] = self.tube_name
+                    self.trial_metrics["n_demos"] = len(self.all_demos)
+                    self.trial_metrics["demo_times"] = self.all_demo_times.copy()
+                    self.trial_metrics["mean_demo_time_s"] = mean_demo_time
+                    self.trial_metrics["total_demo_time_s"] = total_demo_time
+                    self.trial_metrics["completion_time_s"] = total_demo_time
+                    self.trial_metrics["last_demo_time_s"] = float(self.last_demo_time)
+                    self.trial_metrics["hardware_connected"] = self.device_connected
+                    self.all_results.append(self.trial_metrics.copy())
                     self.run_results.append(self.trial_metrics.copy())
 
                 if self.auto_train:
@@ -1113,10 +1078,7 @@ class PA3_Kinesthetic:
                             f"prog={prog*100:.0f}%",
                             f"wall_hits={self.wall_hits}"]
         if self.trial_metrics and self.state in (PLAYBACK, DONE):
-            if self.validation_mode:
-                debug_parts.append(f"σ={self.trial_metrics['gp_sigma_mean_m']*1000:.1f}mm")
-            else:
-                debug_parts.append(f"GP_MND={self.trial_metrics['gp_mnd']*1000:.1f}mm")
+            debug_parts.append(f"σ={self.trial_metrics['gp_sigma_mean_m']*1000:.1f}mm")
         if self.validation_mode:
             debug_parts.append(f"target={self.required_demos}")
 
@@ -1185,12 +1147,9 @@ class PA3_Kinesthetic:
             ]
             if self.validation_mode:
                 lines.insert(3, "Validation metrics are computed at condition finalization")
-            else:
-                lines.insert(3, f"MND from center: {self.per_demo_metrics[-1]*1000:.1f}mm")
-                lines.insert(4, f"Wall hits: {self.per_demo_wall_hits[-1]}")
         elif self.state == DONE:
-            m = self.trial_metrics
             if self.validation_mode:
+                m = self.trial_metrics
                 convergence_demos = m["demos_to_convergence"]
                 convergence_time = m["cumulative_demo_time_to_convergence_s"]
                 convergence_label = (
@@ -1212,12 +1171,10 @@ class PA3_Kinesthetic:
                     f"Participant: {self.participant_number}/{self.participant_count}",
                     f"Condition {self.condition_id}: {self._current_condition_label()}",
                     f"Mode: {self._mode_label()}",
-                    f"GP trained on {m['n_demos']} demos",
-                    f"GP MND: {m['gp_mnd']*1000:.2f}mm  |  "
-                    f"Hausdorff: {m['gp_hausdorff']*1000:.2f}mm",
-                    f"Time: {m['total_demo_time_s']:.1f}s  |  Wall hits: {m['wall_hit_events_total']}  |  Success: {int(m['success'])}",
+                    f"GP trained on {len(self.all_demos)} demos",
+                    "Free mode does not compute or save trial metrics",
                     "A = auto-play  |  P = replay  |  ENTER = add demos",
-                    "N = NASA-TLX  |  C = clear  |  Q = quit",
+                    "C = clear  |  Q = quit",
                 ]
         else:
             lines = []
