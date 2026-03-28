@@ -19,6 +19,8 @@ class TubeHaptics:
                  groove_damping=0.8,   # N·s/m — damps lateral oscillation
                  wall_amplitude=3.0,   # N — peak repulsive force at wall boundary
                  wall_sigma=0.0012,    # m — Gaussian width (controls wall softness)
+                 wall_amplitude_wide=0.8,  # N — soft halo felt from far away
+                 wall_sigma_wide=0.004,    # m — halo width (~12mm range)
                  wall_damping=5.0,     # N·s/m — bidirectional damping near walls
                  groove_deadzone=0.0,
                  local_search_window=80,
@@ -32,6 +34,8 @@ class TubeHaptics:
         self.groove_damping = groove_damping
         self.wall_amplitude = wall_amplitude
         self.wall_sigma = wall_sigma
+        self.wall_amplitude_wide = wall_amplitude_wide
+        self.wall_sigma_wide = wall_sigma_wide
         self.wall_damping = wall_damping
         self.groove_deadzone = groove_deadzone
         self.local_search_window = local_search_window
@@ -49,8 +53,8 @@ class TubeHaptics:
         self.contact_wall = None      # kept for compatibility (drawing)
         self.prev_pos = None
 
-        # Cutoff distance: beyond 3σ from wall, Gaussian force is negligible
-        self._wall_cutoff = 3.0 * self.wall_sigma
+        # Cutoff: use the wider Gaussian to determine active zone
+        self._wall_cutoff = 3.0 * self.wall_sigma_wide
 
 
         # ── Learned-trajectory guidance ──
@@ -188,10 +192,10 @@ class TubeHaptics:
             d_wall = tube.half_width - abs_d_g
 
             if d_wall < self._wall_cutoff:
-                # Gaussian repulsive force: smooth, continuous, no state machine
-                f_mag = self.wall_amplitude * np.exp(
-                    -d_wall ** 2 / (2.0 * self.wall_sigma ** 2)
-                )
+                # Dual Gaussian: sharp wall + soft halo
+                d2 = d_wall ** 2
+                f_mag = (self.wall_amplitude * np.exp(-d2 / (2.0 * self.wall_sigma ** 2))
+                         + self.wall_amplitude_wide * np.exp(-d2 / (2.0 * self.wall_sigma_wide ** 2)))
                 # Direction: push toward centerline
                 wall_dir = -normal_g if signed_d_g > 0 else normal_g
                 fe += f_mag * wall_dir

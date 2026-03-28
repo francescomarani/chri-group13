@@ -348,6 +348,8 @@ class PA3_Kinesthetic:
         self.haptics.reset_proxy()
         self.haptics.wall_amplitude = 3.0
         self.haptics.wall_sigma = 0.0012
+        self.haptics.wall_amplitude_wide = 0.8
+        self.haptics.wall_sigma_wide = 0.004
         self.haptics.wall_damping = 5.0
         self.haptics.groove_enabled = bool(spec["centerline"])
         self.haptics.walls_enabled = bool(spec["walls"])
